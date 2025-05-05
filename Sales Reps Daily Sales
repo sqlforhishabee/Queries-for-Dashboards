@@ -1,0 +1,44 @@
+Query Id: 877
+SELECT
+  `hishabee_employees`.`id` AS `id`,
+  DATE(`Sales`.`created_at`) AS `Sales__created_at`,
+  `hishabee_employees`.`name` AS `name`,
+  SUM(`Sales`.`amount`) AS `sum`
+FROM
+  `hishabee_employees`
+ 
+LEFT JOIN `sales` AS `Sales` ON `hishabee_employees`.`id` = `Sales`.`hishabee_employee_id`
+WHERE
+  `Sales`.`created_at` >= convert_tz(
+    '2025-01-01 00:00:00.000',
+    'UTC',
+    @@session.time_zone
+  )
+GROUP BY
+  `hishabee_employees`.`id`,
+  DATE(`Sales`.`created_at`),
+  `hishabee_employees`.`name`
+ORDER BY
+  `hishabee_employees`.`id` ASC,
+  DATE(`Sales`.`created_at`) ASC,
+  `hishabee_employees`.`name` ASC
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 878
+SELECT
+  `acquisition_sales`.`hishabee_employee_id` AS `hishabee_employee_id`,
+  `acquisition_sales`.`amount` AS `amount`,
+  `acquisition_sales`.`created_at` AS `created_at`
+FROM
+  `acquisition_sales`
+WHERE
+  (
+    `acquisition_sales`.`created_at` >= convert_tz(
+      '2025-01-01 00:00:00.000',
+      'UTC',
+      @@session.time_zone
+    )
+  )
+ 
+   AND (
+    `acquisition_sales`.`hishabee_employee_id` IS NOT NULL
+  )
