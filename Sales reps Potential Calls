@@ -1,0 +1,225 @@
+Query Id:  985
+
+WITH LatestSales AS (
+    -- Pre-aggregate latest sales date per shop
+    SELECT
+        shop_id,
+        MAX(created_at) AS latest_sales_date
+    FROM
+        sales
+    GROUP BY
+        shop_id
+),
+QualifyingCalls AS (
+    -- Get shops with at least one call > 5 minutes, considering sales date
+    SELECT DISTINCT
+        c.shop_id
+    FROM
+        callings c
+    LEFT JOIN
+        LatestSales ls ON c.shop_id = ls.shop_id
+    WHERE
+        c.time >= '2025-03-02'
+        AND c.time <= CURDATE()
+        AND c.inorout = 'Inbound'
+        AND c.call_duration > 300  -- 5 minutes
+        AND (ls.latest_sales_date IS NULL OR c.time < ls.latest_sales_date)
+    GROUP BY
+        c.shop_id
+    HAVING
+        MAX(CASE WHEN ls.latest_sales_date IS NOT NULL AND c.time < ls.latest_sales_date THEN c.call_duration ELSE c.call_duration END) > 300
+),
+CallsWithMaxDuration AS (
+    -- Pre-aggregate calls with conditional max duration
+    SELECT
+        c.shop_id,
+        DATE(c.time) AS call_date,
+        COUNT(*) AS number_of_calls,
+        CASE 
+            WHEN ls.latest_sales_date IS NOT NULL 
+            THEN MAX(CASE WHEN c.time < ls.latest_sales_date THEN c.call_duration ELSE 0 END)
+            ELSE MAX(c.call_duration)
+        END AS highest_call_duration,
+        CASE 
+            WHEN ls.latest_sales_date IS NOT NULL 
+            THEN MAX(CASE WHEN c.time < ls.latest_sales_date AND c.call_duration = (
+                SELECT MAX(c2.call_duration)
+                FROM callings c2
+                WHERE c2.shop_id = c.shop_id
+                AND DATE(c2.time) = DATE(c.time)
+                AND c2.time < ls.latest_sales_date
+                AND c2.inorout = 'Inbound'
+            ) THEN c.time END)
+            ELSE MAX(CASE WHEN c.call_duration = (
+                SELECT MAX(c2.call_duration)
+                FROM callings c2
+                WHERE c2.shop_id = c.shop_id
+                AND DATE(c2.time) = DATE(c.time)
+                AND c2.inorout = 'Inbound'
+            ) THEN c.time END)
+        END AS highest_call_time
+    FROM
+        callings c
+    JOIN
+        QualifyingCalls qc ON c.shop_id = qc.shop_id
+    LEFT JOIN
+        LatestSales ls ON c.shop_id = ls.shop_id
+    WHERE
+        c.time >= '2025-03-02'
+        AND c.time <= CURDATE()
+        AND c.inorout = 'Inbound'
+    GROUP BY
+        c.shop_id,
+        DATE(c.time)
+    HAVING
+        MAX(CASE WHEN ls.latest_sales_date IS NOT NULL THEN 
+                     (CASE WHEN c.time < ls.latest_sales_date THEN c.call_duration ELSE 0 END)
+                 ELSE c.call_duration END) > 300
+),
+UsageCounts AS (
+    SELECT
+        cm.shop_id,
+        COUNT(DISTINCT t.id) AS sell_count,
+        COUNT(DISTINCT d.id) AS due_count,
+        COUNT(DISTINCT p.id) AS purchase_count,
+        COUNT(DISTINCT sp.id) AS product_count
+    FROM
+        CallsWithMaxDuration cm
+    LEFT JOIN transactions t ON t.shop_id = cm.shop_id AND t.created_at > cm.highest_call_time AND t.created_at <= CURDATE()
+    LEFT JOIN dues d ON d.shop_id = cm.shop_id AND d.created_at > cm.highest_call_time AND t.created_at <= CURDATE()
+    LEFT JOIN purchases p ON p.shop_id = cm.shop_id AND p.created_at > cm.highest_call_time AND p.created_at <= CURDATE()
+    LEFT JOIN shop_products sp ON sp.shop_id = cm.shop_id AND sp.created_at > cm.highest_call_time AND sp.created_at <= CURDATE()
+    GROUP BY
+        cm.shop_id
+),
+ShopDetails AS (
+    SELECT
+        s.id AS shop_id,
+        s.public_number,
+        s.activation_grade,
+        he.name AS employee_name,
+        he.region AS employee_region,
+        t.name AS team_name,
+        ls.latest_sales_date AS sales_date,
+        DATEDIFF(ls.latest_sales_date, s.created_at) AS sales_cycle  -- Sales cycle in days
+    FROM
+        shops s
+    LEFT JOIN hishabee_employees he ON s.assigned_to = he.id
+    LEFT JOIN teams t ON he.team_id = t.id
+    LEFT JOIN LatestSales ls ON s.id = ls.shop_id
+)
+SELECT
+    cm.call_date AS "Date",
+    cm.shop_id AS "Shop Id",
+    sd.public_number AS "Public Number",
+    sd.activation_grade AS "Activation Grade",
+    sd.employee_name AS "Hishabee Employees - Assigned To__name",
+    sd.employee_region AS "Hishabee Employees - Assigned To__region",
+    sd.team_name AS "Teams__name",
+    cm.number_of_calls AS "Number of call",
+    cm.highest_call_duration AS "Highest call duration",
+    cm.highest_call_time AS "Highest duration call time",
+    uc.sell_count AS "Sell count",
+    uc.due_count AS "Due count",
+    uc.purchase_count AS "Purchase count",
+    uc.product_count AS "Product count",
+    (uc.sell_count + uc.due_count + uc.purchase_count + uc.product_count) AS "Cumulative usage count",
+    CASE WHEN sd.sales_date IS NULL THEN 'Null' ELSE 'Done' END AS "Sale status",
+    sd.sales_date AS "Sales Date",
+    sd.sales_cycle AS "Sales Cycle"  -- Added sales cycle
+FROM
+    CallsWithMaxDuration cm
+JOIN
+    UsageCounts uc ON cm.shop_id = uc.shop_id
+LEFT JOIN
+    ShopDetails sd ON cm.shop_id = sd.shop_id
+ORDER BY
+    cm.shop_id ASC;
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+WITH AssignedCalls AS (
+    SELECT 
+        DATE(`daily_call_lists`.`assigned_call_time`) AS `call_date`,
+        `daily_call_lists`.`agent_id` AS `employee_id`,
+        `Hishabee Employees - Agent`.`name` AS `employee_name`,
+        `Teams`.`name` AS `team_name`,
+        REPLACE(REPLACE(`daily_call_lists`.`primary_lead`, '[', ''), ']', '') AS `Lead Type`,
+        COUNT(DISTINCT `daily_call_lists`.`shop_id`) AS `assigned_call`
+    FROM `daily_call_lists`
+    LEFT JOIN `callings` AS `Callings` 
+        ON `daily_call_lists`.`id` = `Callings`.`daily_call_id`
+    LEFT JOIN `hishabee_employees` AS `Hishabee Employees - Agent`
+        ON `daily_call_lists`.`agent_id` = `Hishabee Employees - Agent`.`id`
+    LEFT JOIN `teams` AS `Teams`
+        ON `Hishabee Employees - Agent`.`team_id` = `Teams`.`id`
+    WHERE 
+        `daily_call_lists`.`assigned_call_time` >= '2025-03-01'
+        AND `daily_call_lists`.`assigned_call_time` <= NOW() + INTERVAL 6 HOUR  -- GMT+6
+        AND `Hishabee Employees - Agent`.`active` = TRUE
+        AND `Hishabee Employees - Agent`.`position` = 'Sales_Manager'
+    GROUP BY `call_date`, `daily_call_lists`.`agent_id`, `employee_name`, `team_name`, `Lead Type`
+),
+CallLanded AS (
+    SELECT 
+        DATE(`daily_call_lists`.`assigned_call_time`) AS `call_date`,
+        `daily_call_lists`.`agent_id` AS `employee_id`,
+        `Teams`.`name` AS `team_name`,
+        `Hishabee Employees`.`name` AS `employee_name`,
+        REPLACE(REPLACE(`daily_call_lists`.`primary_lead`, '[', ''), ']', '') AS `Lead Type`,
+        COUNT(DISTINCT CASE WHEN `Callings`.`inorout` = 'Inbound' THEN `daily_call_lists`.`shop_id` END) AS `landed_call`
+    FROM `daily_call_lists`
+    LEFT JOIN `callings` AS `Callings` 
+        ON `daily_call_lists`.`id` = `Callings`.`daily_call_id`
+    LEFT JOIN `hishabee_employees` AS `Hishabee Employees` 
+        ON `daily_call_lists`.`agent_id` = `Hishabee Employees`.`id`
+    LEFT JOIN `teams` AS `Teams` 
+        ON `Hishabee Employees`.`team_id` = `Teams`.`id`
+    WHERE 
+        `daily_call_lists`.`assigned_call_time` >= '2025-03-01'
+        AND `daily_call_lists`.`assigned_call_time` <= NOW() + INTERVAL 6 HOUR  -- GMT+6
+        AND `Hishabee Employees`.`active` = TRUE
+        AND `Hishabee Employees`.`position` = 'Sales_Manager'
+    GROUP BY `call_date`, `daily_call_lists`.`agent_id`, `employee_name`, `team_name`, `Lead Type`
+),
+ConnectedCalls AS (
+    SELECT 
+        DATE(`daily_call_lists`.`assigned_call_time`) AS `call_date`,
+        `daily_call_lists`.`agent_id` AS `employee_id`,
+        REPLACE(REPLACE(`daily_call_lists`.`primary_lead`, '[', ''), ']', '') AS `Lead Type`,
+        COUNT(DISTINCT CASE WHEN `Callings`.`inorout` = 'Inbound' 
+                            AND (`Callings`.`answer` <> 'DROP' OR `Callings`.`answer` IS NULL)
+                            AND (`Callings`.`answer` <> 'Not Connected' OR `Callings`.`answer` IS NULL)
+                       THEN `daily_call_lists`.`shop_id` END) AS `connected_call`
+    FROM `daily_call_lists`
+    LEFT JOIN `callings` AS `Callings` 
+        ON `daily_call_lists`.`id` = `Callings`.`daily_call_id`
+    LEFT JOIN `hishabee_employees` AS `Hishabee Employees` 
+        ON `daily_call_lists`.`agent_id` = `Hishabee Employees`.`id`
+    WHERE 
+        `daily_call_lists`.`assigned_call_time` >= '2025-03-01'
+        AND `daily_call_lists`.`assigned_call_time` <= NOW() + INTERVAL 6 HOUR  -- GMT+6
+        AND `Hishabee Employees`.`active` = TRUE
+        AND `Hishabee Employees`.`position` = 'Sales_Manager'
+    GROUP BY `call_date`, `daily_call_lists`.`agent_id`, `Lead Type`
+)
+SELECT 
+    COALESCE(A.call_date, B.call_date, C.call_date) AS `date`,
+    COALESCE(A.`Lead Type`, B.`Lead Type`, C.`Lead Type`) AS `Lead Type`,
+    COALESCE(A.employee_id, B.employee_id, C.employee_id) AS `employee_id`,
+    COALESCE(A.employee_name, B.employee_name, '') AS `employee_name`,
+    COALESCE(A.team_name, B.team_name, '') AS `team_name`,
+    COALESCE(A.assigned_call, 0) AS `assigned_call`,
+    COALESCE(B.landed_call, 0) AS `landed_call`,
+    COALESCE(C.connected_call, 0) AS `connected_call`,
+    COALESCE(A.assigned_call, 0) - COALESCE(B.landed_call, 0) AS `left_calls`
+FROM AssignedCalls A
+LEFT JOIN CallLanded B 
+    ON A.call_date = B.call_date 
+    AND A.employee_id = B.employee_id
+    AND A.`Lead Type` = B.`Lead Type`
+LEFT JOIN ConnectedCalls C 
+    ON COALESCE(A.call_date, B.call_date) = C.call_date
+    AND COALESCE(A.employee_id, B.employee_id) = C.employee_id
+    AND COALESCE(A.`Lead Type`, B.`Lead Type`) = C.`Lead Type`
+
+ORDER BY `date` ASC, `employee_id` DESC;
