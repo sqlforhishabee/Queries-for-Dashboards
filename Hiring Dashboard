@@ -1,0 +1,452 @@
+Query ID - 854
+WITH SalesData AS (
+  SELECT
+    DATE(s.`created_at`) AS `activity_date`,
+    s.`hishabee_employee_id`,
+    e.`name` AS `employee_name`,
+    DATE(e.`created_at`) AS `employee_created_at`,
+    CASE
+      WHEN e.`active` = 1 THEN 'TRUE'
+      WHEN e.`active` = 0 THEN 'FALSE'
+      ELSE 'FALSE'
+    END AS `active`,
+    COUNT(DISTINCT s.`shop_id`) AS `distinct_shops_from_sales`,
+    SUM(s.`amount`) AS `total_sales`
+  FROM
+    `sales` s
+  LEFT JOIN `hishabee_employees` e ON s.`hishabee_employee_id` = e.`id`
+  WHERE
+    s.`created_at` >= CONVERT_TZ('2024-10-01 00:00:00.000', 'UTC', @@session.time_zone)
+    AND (
+      s.`hishabee_employee_id` <> 0
+      OR s.`hishabee_employee_id` IS NULL
+    )
+    AND s.`subscription` IN ('ADVANCED', 'STANDARD')
+  GROUP BY
+    DATE(s.`created_at`),
+    s.`hishabee_employee_id`,
+    e.`name`,
+    DATE(e.`created_at`),
+    e.`active`
+),
+CallingsData AS (
+  SELECT
+    DATE(c.`time`) AS `activity_date`,
+    c.`hishabee_employee_id`,
+    e.`name` AS `employee_name`,
+    DATE(e.`created_at`) AS `employee_created_at`,
+    CASE
+      WHEN e.`active` = 1 THEN 'TRUE'
+      WHEN e.`active` = 0 THEN 'FALSE'
+      ELSE 'FALSE'
+    END AS `active`,
+    COUNT(DISTINCT c.`shop_id`) AS `distinct_shops_from_callings`
+  FROM
+    `callings` c
+  LEFT JOIN `hishabee_employees` e ON c.`hishabee_employee_id` = e.`id`
+  WHERE
+    c.`type` = 'call'
+    AND c.`inorout` = 'Inbound'
+    AND c.`answer` IN ('Ans', 'Answer', 'INCALL', 'NI', 'Bu')
+    AND c.`time` >= TIMESTAMP '2024-10-01 00:00:00.000'
+    AND (
+      c.`hishabee_employee_id` <> 32
+      OR c.`hishabee_employee_id` IS NULL
+    )
+  GROUP BY
+    DATE(c.`time`),
+    c.`hishabee_employee_id`,
+    e.`name`,
+    DATE(e.`created_at`),
+    e.`active`
+),
+CombinedData AS (
+  SELECT
+    s.`employee_name`,
+    s.`hishabee_employee_id` AS `employee_id`,
+    s.`employee_created_at`,
+    s.`activity_date`,
+    s.`active`,
+    s.`total_sales`,
+    s.`distinct_shops_from_sales`,
+    0 AS `distinct_shops_from_callings`
+  FROM
+    SalesData s
+  UNION ALL
+  SELECT
+    c.`employee_name`,
+    c.`hishabee_employee_id` AS `employee_id`,
+    c.`employee_created_at`,
+    c.`activity_date`,
+    c.`active`,
+    0 AS `total_sales`,
+    0 AS `distinct_shops_from_sales`,
+    c.`distinct_shops_from_callings`
+  FROM
+    CallingsData c
+),
+TotalEarnings AS (
+  SELECT
+    `daily_sales_earnings`.`hishabee_employee_id` AS `employee_id`,
+    DATE(`daily_sales_earnings`.`created_at`) AS `activity_date`,
+    SUM(`daily_sales_earnings`.`total`) AS `total_earnings`
+  FROM
+    `daily_sales_earnings`
+  WHERE
+    `daily_sales_earnings`.`created_at` >= CONVERT_TZ('2024-10-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    `daily_sales_earnings`.`hishabee_employee_id`,
+    DATE(`daily_sales_earnings`.`created_at`)
+)
+SELECT
+  c.`employee_id`,
+  c.`employee_created_at`,
+  c.`employee_name`,
+  c.`active`,
+  c.`activity_date`, 
+  SUM(c.`total_sales`) AS `total_sales`,
+  SUM(c.`distinct_shops_from_sales`) AS `distinct_shops_from_sales`,
+  SUM(c.`distinct_shops_from_callings`) AS `distinct_shops_from_callings`,
+  COALESCE(e.`total_earnings`, 0) AS `total_earnings`,
+  CONCAT(MONTHNAME(c.`activity_date`), ' ', YEAR(c.`activity_date`)) AS `month`,
+  SUM(SUM(c.`total_sales`)) OVER (
+    PARTITION BY c.`employee_id`, DATE_FORMAT(c.`activity_date`, '%Y-%m') 
+    ORDER BY c.`activity_date`
+  ) AS `cumulative_sales`
+FROM
+  CombinedData c
+LEFT JOIN
+  TotalEarnings e
+ON
+  c.`employee_id` = e.`employee_id`
+  AND c.`activity_date` = e.`activity_date`
+GROUP BY
+  c.`employee_name`,
+  c.`employee_id`,
+  c.`employee_created_at`,
+  c.`activity_date`,
+  c.`active`,
+  e.`total_earnings`
+ORDER BY
+  c.`employee_id`,
+  c.`employee_name`,
+  c.`activity_date`;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 860
+WITH RankedSales AS (
+  SELECT
+    `hishabee_employee_id`,
+    DATE(`created_at`) AS `created_at`,
+    ROW_NUMBER() OVER (PARTITION BY `hishabee_employee_id` ORDER BY DATE(`created_at`) ASC) AS `rank`
+  FROM `sales`
+)
+SELECT
+  e.`id` AS `employee_id`,
+  e.`active`,
+  
+  MIN(r.`created_at`) AS `first_sale_date`,
+  MAX(CASE WHEN r.`rank` = 2 THEN r.`created_at` END) AS `second_sale_date`,
+  CASE 
+    WHEN e.`active` = FALSE THEN MAX(DATE(c.`time`))
+    ELSE NULL
+  END AS `last_call_date`
+FROM `hishabee_employees` e
+LEFT JOIN `callings` AS c ON e.`id` = c.`hishabee_employee_id`
+LEFT JOIN RankedSales r ON e.`id` = r.`hishabee_employee_id`
+WHERE
+  e.`position` = 'Sales_Manager'
+GROUP BY
+  e.`id`, e.`active`
+ORDER BY
+  e.`id` ASC, e.`active` ASC;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 861
+WITH SalesData AS (
+  SELECT
+    DATE_FORMAT(s.`created_at`, '%Y-%m') AS `month`,
+    s.`hishabee_employee_id`,
+    e.`name` AS `employee_name`,
+    e.`region` AS `Region`,
+    DATE(e.`created_at`) AS `employee_created_at`,
+    CASE
+      WHEN e.`active` = 1 THEN 'TRUE'
+      WHEN e.`active` = 0 THEN 'FALSE'
+      ELSE 'FALSE'
+    END AS `active`,
+    COUNT(DISTINCT s.`shop_id`) AS `distinct_shops_from_sales`,
+    SUM(s.`amount`) AS `total_sales`
+  FROM
+    `sales` s
+  LEFT JOIN `hishabee_employees` e ON s.`hishabee_employee_id` = e.`id`
+  WHERE
+    s.`created_at` >= CONVERT_TZ('2024-10-01 00:00:00.000', 'UTC', @@session.time_zone)
+    AND (
+      s.`hishabee_employee_id` <> 0
+      OR s.`hishabee_employee_id` IS NULL
+    )
+    AND s.`subscription` IN ('ADVANCED', 'STANDARD')
+  GROUP BY
+    DATE_FORMAT(s.`created_at`, '%Y-%m'),
+    s.`hishabee_employee_id`,
+    e.`name`,
+    DATE(e.`created_at`),
+    e.`active`
+),
+CallingsData AS (
+  SELECT
+    DATE_FORMAT(c.`time`, '%Y-%m') AS `month`,
+    c.`hishabee_employee_id`,
+    e.`name` AS `employee_name`,
+    e.`region` AS `Region`,
+    DATE(e.`created_at`) AS `employee_created_at`,
+    CASE
+      WHEN e.`active` = 1 THEN 'TRUE'
+      WHEN e.`active` = 0 THEN 'FALSE'
+      ELSE 'FALSE'
+    END AS `active`,
+    COUNT(DISTINCT c.`shop_id`) AS `distinct_shops_from_callings`
+  FROM
+    `callings` c
+  LEFT JOIN `hishabee_employees` e ON c.`hishabee_employee_id` = e.`id`
+  WHERE
+    c.`type` = 'call'
+    AND c.`inorout` = 'Inbound'
+    AND c.`answer` IN ('Ans', 'Answer', 'INCALL', 'NI', 'Bu')
+    AND c.`time` >= TIMESTAMP '2024-10-01 00:00:00.000'
+    AND (
+      c.`hishabee_employee_id` <> 32
+      OR c.`hishabee_employee_id` IS NULL
+    )
+  GROUP BY
+    DATE_FORMAT(c.`time`, '%Y-%m'),
+    c.`hishabee_employee_id`,
+    e.`name`,
+    DATE(e.`created_at`),
+    e.`active`
+),
+CombinedData AS (
+  SELECT
+    s.`employee_name`,
+    s.`hishabee_employee_id` AS `employee_id`,
+    s.`employee_created_at`,
+    s.`month`,
+    s.`active`,
+    s.`total_sales`,
+    s.`distinct_shops_from_sales`,
+    0 AS `distinct_shops_from_callings`,
+    s.`Region`
+  FROM
+    SalesData s
+  UNION ALL
+  SELECT
+    c.`employee_name`,
+    c.`hishabee_employee_id` AS `employee_id`,
+    c.`employee_created_at`,
+    c.`month`,
+    c.`active`,
+    0 AS `total_sales`,
+    0 AS `distinct_shops_from_sales`,
+    c.`distinct_shops_from_callings`,
+    c.`Region`
+  FROM
+    CallingsData c
+),
+TotalEarnings AS (
+  SELECT
+    `daily_sales_earnings`.`hishabee_employee_id` AS `employee_id`,
+    DATE_FORMAT(`daily_sales_earnings`.`created_at`, '%Y-%m') AS `month`,
+    SUM(`daily_sales_earnings`.`total`) AS `total_earnings`
+  FROM
+    `daily_sales_earnings`
+  WHERE
+    `daily_sales_earnings`.`created_at` >= CONVERT_TZ('2024-10-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    `daily_sales_earnings`.`hishabee_employee_id`,
+    DATE_FORMAT(`daily_sales_earnings`.`created_at`, '%Y-%m')
+),
+ActivityCounts AS (
+  SELECT
+    STR_TO_DATE(
+      CONCAT(DATE_FORMAT(`daily_sales_earnings`.`created_at`, '%Y-%m'), '-01'),
+      '%Y-%m-%d'
+    ) AS `created_at`,
+    `daily_sales_earnings`.`hishabee_employee_id` AS `employee_id`,
+    DATE_FORMAT(`daily_sales_earnings`.`created_at`, '%Y-%m') AS `month`,
+    COUNT(*) AS `activity_count`
+  FROM
+    `daily_sales_earnings`
+  WHERE
+    `daily_sales_earnings`.`daily_salary` <> 0 -- Include the condition for daily_salary
+  GROUP BY
+    STR_TO_DATE(
+      CONCAT(DATE_FORMAT(`daily_sales_earnings`.`created_at`, '%Y-%m'), '-01'),
+      '%Y-%m-%d'
+    ),
+    `daily_sales_earnings`.`hishabee_employee_id`,
+    DATE_FORMAT(`daily_sales_earnings`.`created_at`, '%Y-%m')
+)
+SELECT
+  c.`employee_id`,
+  c.`month`,
+  c.`employee_created_at`,
+  c.`employee_name`,
+  c.`active`,
+  SUM(c.`total_sales`) AS `total_sales`,
+  MAX(c.`distinct_shops_from_sales`) AS `distinct_shops_from_sales`,
+  MAX(c.`distinct_shops_from_callings`) AS `distinct_shops_from_callings`,
+  COALESCE(e.`total_earnings`, 0) AS `total_earnings`,
+  COALESCE(a.`activity_count`, 0) AS `activity_count`,
+  c.`Region`
+FROM
+  CombinedData c
+LEFT JOIN
+  TotalEarnings e
+ON
+  c.`employee_id` = e.`employee_id`
+  AND c.`month` = e.`month`
+LEFT JOIN
+  ActivityCounts a
+ON
+  c.`employee_id` = a.`employee_id`
+  AND c.`month` = a.`month`
+GROUP BY
+  c.`employee_name`,
+  c.`employee_id`,
+  c.`employee_created_at`,
+  c.`month`,
+  c.`active`,
+  e.`total_earnings`,
+  a.`activity_count`,
+  c.`Region`
+ORDER BY
+  c.`month`;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 862
+WITH daily_sales AS (
+  SELECT
+    DATE(s.created_at) AS created_date,
+    s.hishabee_employee_id AS employee_id,
+    SUM(s.amount) AS total_sales
+  FROM
+    sales s
+  WHERE
+    s.created_at >= CONVERT_TZ('2024-10-01 00:00:00.000', 'UTC', @@session.time_zone)
+    AND s.hishabee_employee_id <> 0
+  GROUP BY
+    s.hishabee_employee_id, DATE(s.created_at)
+),
+table1 AS (
+  SELECT
+    created_date,
+    employee_id,
+    total_sales,
+    SUM(total_sales) OVER (
+      PARTITION BY employee_id, DATE_FORMAT(created_date, '%Y-%m')
+      ORDER BY created_date
+      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_sales,
+    DATE_FORMAT(created_date, '%Y-%m') AS `month`
+  FROM
+    daily_sales
+),
+employee_union AS (
+  SELECT
+    t1.created_date,
+    t1.employee_id,
+    t1.total_sales,
+    t1.cumulative_sales,
+    t1.month
+  FROM
+    table1 t1
+  UNION ALL
+  SELECT
+    DATE(CONCAT(DATE_FORMAT(dse.created_at, '%Y-%m'), '-01')) AS created_date, -- First date of the month
+    dse.hishabee_employee_id AS employee_id,
+    0 AS total_sales,
+    0 AS cumulative_sales,
+    DATE_FORMAT(dse.created_at, '%Y-%m') AS `month`
+  FROM
+    daily_sales_earnings dse
+  WHERE
+    dse.created_at >= CONVERT_TZ('2024-10-01 00:00:00.000', 'UTC', @@session.time_zone) -- Date filter applied
+    AND NOT EXISTS (
+      SELECT 1
+      FROM table1 t1
+      WHERE t1.employee_id = dse.hishabee_employee_id
+        AND t1.month = DATE_FORMAT(dse.created_at, '%Y-%m')
+    )
+)
+SELECT
+  eu.created_date,
+  eu.employee_id,
+  eu.total_sales,
+  eu.cumulative_sales,
+  eu.month,
+  CASE
+    WHEN he.id IS NULL THEN 'new'
+    WHEN DATEDIFF(eu.created_date, he.created_at) >= 30 THEN 'old'
+    ELSE 'new'
+  END AS employee_status
+FROM
+  employee_union eu
+LEFT JOIN
+  hishabee_employees he
+ON
+  eu.employee_id = he.id
+ORDER BY
+  eu.employee_id, eu.created_date;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 859
+SELECT
+  `acquisition_sales`.`hishabee_employee_id` AS `hishabee_employee_id`,
+  STR_TO_DATE(
+    CONCAT(
+      DATE_FORMAT(`acquisition_sales`.`created_at`, '%Y-%m'),
+      '-01'
+    ),
+    '%Y-%m-%d'
+  ) AS `created_at`,
+  count(distinct `acquisition_sales`.`user_id`) AS `count`,
+  SUM(`acquisition_sales`.`amount`) AS `sum`,
+  MAX(DATE(`acquisition_sales`.`created_at`)) AS `max`
+FROM
+  `acquisition_sales`
+WHERE
+  (
+    (`acquisition_sales`.`sale_type` = 'APP_SELL')
+   
+    OR (
+      `acquisition_sales`.`sale_type` = 'ACQUISITION_SELL'
+    )
+  )
+ 
+   AND (
+    `acquisition_sales`.`created_at` >= convert_tz(
+      '2024-11-01 00:00:00.000',
+      'UTC',
+      @@session.time_zone
+    )
+  )
+GROUP BY
+  `acquisition_sales`.`hishabee_employee_id`,
+  STR_TO_DATE(
+    CONCAT(
+      DATE_FORMAT(`acquisition_sales`.`created_at`, '%Y-%m'),
+      '-01'
+    ),
+    '%Y-%m-%d'
+  )
+ORDER BY
+  `acquisition_sales`.`hishabee_employee_id` ASC,
+  STR_TO_DATE(
+    CONCAT(
+      DATE_FORMAT(`acquisition_sales`.`created_at`, '%Y-%m'),
+      '-01'
+    ),
+    '%Y-%m-%d'
+  ) ASC
+
