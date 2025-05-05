@@ -1,0 +1,471 @@
+Query Id: 727
+
+SELECT 
+  DATE(`gh`.`created_at`) AS `date`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A1' THEN 1 ELSE 0 END) AS `A1`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A1 PLUS' THEN 1 ELSE 0 END) AS `A1_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A2' THEN 1 ELSE 0 END) AS `A2`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A2 PLUS' THEN 1 ELSE 0 END) AS `A2_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A3' THEN 1 ELSE 0 END) AS `A3`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A3 PLUS' THEN 1 ELSE 0 END) AS `A3_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A4' THEN 1 ELSE 0 END) AS `A4`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'A4 PLUS' THEN 1 ELSE 0 END) AS `A4_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B1' THEN 1 ELSE 0 END) AS `B1`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B1 PLUS' THEN 1 ELSE 0 END) AS `B1_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B2' THEN 1 ELSE 0 END) AS `B2`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B2 PLUS' THEN 1 ELSE 0 END) AS `B2_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B3' THEN 1 ELSE 0 END) AS `B3`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B3 PLUS' THEN 1 ELSE 0 END) AS `B3_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B4' THEN 1 ELSE 0 END) AS `B4`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'B4 PLUS' THEN 1 ELSE 0 END) AS `B4_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C1' THEN 1 ELSE 0 END) AS `C1`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C1 PLUS' THEN 1 ELSE 0 END) AS `C1_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C2' THEN 1 ELSE 0 END) AS `C2`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C2 PLUS' THEN 1 ELSE 0 END) AS `C2_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C3' THEN 1 ELSE 0 END) AS `C3`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C3 PLUS' THEN 1 ELSE 0 END) AS `C3_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C4' THEN 1 ELSE 0 END) AS `C4`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'C4 PLUS' THEN 1 ELSE 0 END) AS `C4_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D1' THEN 1 ELSE 0 END) AS `D1`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D1 PLUS' THEN 1 ELSE 0 END) AS `D1_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D2' THEN 1 ELSE 0 END) AS `D2`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D2 PLUS' THEN 1 ELSE 0 END) AS `D2_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D3' THEN 1 ELSE 0 END) AS `D3`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D3 PLUS' THEN 1 ELSE 0 END) AS `D3_PLUS`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D4' THEN 1 ELSE 0 END) AS `D4`,
+  SUM(CASE WHEN `gh`.`activation_grade` = 'D4 PLUS' THEN 1 ELSE 0 END) AS `D4_PLUS`
+FROM (
+  SELECT 
+    `id`,
+    `shop_id`,
+    `activation_grade`,
+    `created_at`,
+    LAG(`activation_grade`) OVER (PARTITION BY `shop_id` ORDER BY `created_at`) AS `previous_activation_grade`
+  FROM 
+    `grade_histories`
+) AS `gh`
+WHERE 
+  `gh`.`created_at` >= '2024-07-01'
+  AND `gh`.`activation_grade` != `gh`.`previous_activation_grade`
+GROUP BY 
+  DATE(`gh`.`created_at`)
+ORDER BY 
+  `date`;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 728
+
+WITH UserStats AS (
+    SELECT
+        DATE(created_at) AS date,
+        COUNT(*) AS total_user_registrations
+    FROM users
+    WHERE created_at >= '2024-07-01'
+    GROUP BY DATE(created_at)
+),
+ShopStats AS (
+    SELECT
+        DATE(created_at) AS date,
+        COUNT(DISTINCT user_id) AS total_shop_registrations
+    FROM shops
+    WHERE created_at >= '2024-07-01'
+    GROUP BY DATE(created_at)
+),
+CallStats AS (
+    SELECT
+        DATE(time) AS date,
+        COUNT(*) AS total_calls,
+        COUNT(CASE WHEN answer IS NOT NULL THEN 1 END) AS total_call_answers,
+        COUNT(CASE 
+            WHEN (answer <> 'DROP' OR answer IS NULL) 
+            AND (answer <> 'Not Connected' OR answer IS NULL) 
+            THEN 1 
+        END) AS total_specific_call_answers
+    FROM callings
+    WHERE created_at >= '2024-07-01'
+    AND type = 'call'
+    GROUP BY DATE(time)
+),
+TodayRegisteredShopCalls AS (
+    SELECT
+        DATE(c.time) AS date,
+        COUNT(*) AS total_today_calls,
+        COUNT(CASE 
+            WHEN (c.answer <> 'DROP' OR c.answer IS NULL) 
+            AND (c.answer <> 'Not Connected' OR c.answer IS NULL) 
+            THEN 1 
+        END) AS total_today_registered_call_answers
+    FROM callings c
+    JOIN shops s ON c.shop_id = s.id
+    JOIN users u ON s.user_id = u.id
+    WHERE DATE(u.created_at) = DATE(c.time)
+    AND DATE(c.time) >= '2024-07-01'
+    AND c.type = 'call'
+    GROUP BY DATE(c.time)
+),
+CallDurationStats AS (
+    SELECT
+        DATE(created_at) AS date,
+        COUNT(CASE 
+            WHEN call_duration < 60 
+            AND (answer <> 'DROP' OR answer IS NULL) 
+            AND (answer <> 'Not Connected' OR answer IS NULL) 
+            THEN 1 
+        END) AS count_aht_below_1,
+        COUNT(CASE 
+            WHEN call_duration BETWEEN 60 AND 240 
+            AND (answer <> 'DROP' OR answer IS NULL) 
+            AND (answer <> 'Not Connected' OR answer IS NULL) 
+            THEN 1 
+        END) AS count_aht_1_to_4,
+        COUNT(CASE 
+            WHEN call_duration BETWEEN 240 AND 600 
+            AND (answer <> 'DROP' OR answer IS NULL) 
+            AND (answer <> 'Not Connected' OR answer IS NULL) 
+            THEN 1 
+        END) AS count_aht_4_to_10,
+        COUNT(CASE 
+            WHEN call_duration BETWEEN 600 AND 900 
+            AND (answer <> 'DROP' OR answer IS NULL) 
+            AND (answer <> 'Not Connected' OR answer IS NULL) 
+            THEN 1 
+        END) AS count_aht_10_to_15,
+        COUNT(CASE 
+            WHEN call_duration BETWEEN 900 AND 1200 
+            AND (answer <> 'DROP' OR answer IS NULL) 
+            AND (answer <> 'Not Connected' OR answer IS NULL) 
+            THEN 1 
+        END) AS count_aht_15_to_20,
+        COUNT(CASE 
+            WHEN call_duration > 1200 
+            AND (answer <> 'DROP' OR answer IS NULL) 
+            AND (answer <> 'Not Connected' OR answer IS NULL) 
+            THEN 1 
+        END) AS count_aht_20_plus
+    FROM callings
+    WHERE created_at >= '2024-07-01'
+    AND type = 'call'
+    GROUP BY DATE(created_at)
+),
+TodayRegisteredUserAHT AS (
+    SELECT
+        DATE(c.time) AS date,
+        COUNT(CASE 
+            WHEN c.call_duration < 60 
+            AND (c.answer <> 'DROP' OR c.answer IS NULL) 
+            AND (c.answer <> 'Not Connected' OR c.answer IS NULL) 
+            THEN 1 
+        END) AS today_count_aht_below_1,
+        COUNT(CASE 
+            WHEN c.call_duration BETWEEN 60 AND 240 
+            AND (c.answer <> 'DROP' OR c.answer IS NULL) 
+            AND (c.answer <> 'Not Connected' OR c.answer IS NULL) 
+            THEN 1 
+        END) AS today_count_aht_1_to_4,
+        COUNT(CASE 
+            WHEN c.call_duration BETWEEN 240 AND 600 
+            AND (c.answer <> 'DROP' OR c.answer IS NULL) 
+            AND (c.answer <> 'Not Connected' OR c.answer IS NULL) 
+            THEN 1 
+        END) AS today_count_aht_4_to_10,
+        COUNT(CASE 
+            WHEN c.call_duration BETWEEN 600 AND 900 
+            AND (c.answer <> 'DROP' OR c.answer IS NULL) 
+            AND (c.answer <> 'Not Connected' OR c.answer IS NULL) 
+            THEN 1 
+        END) AS today_count_aht_10_to_15,
+        COUNT(CASE 
+            WHEN c.call_duration BETWEEN 900 AND 1200 
+            AND (c.answer <> 'DROP' OR c.answer IS NULL) 
+            AND (c.answer <> 'Not Connected' OR c.answer IS NULL) 
+            THEN 1 
+        END) AS today_count_aht_15_to_20,
+        COUNT(CASE 
+            WHEN c.call_duration > 1200 
+            AND (c.answer <> 'DROP' OR c.answer IS NULL) 
+            AND (c.answer <> 'Not Connected' OR c.answer IS NULL) 
+            THEN 1 
+        END) AS today_count_aht_20_plus
+    FROM callings c
+    JOIN shops s ON c.shop_id = s.id
+    JOIN users u ON s.user_id = u.id
+    WHERE DATE(u.created_at) = DATE(c.time)
+    AND DATE(c.time) >= '2024-07-01'
+    AND c.type = 'call'
+    GROUP BY DATE(c.time)
+),
+UniqueShopCalls AS (
+    SELECT
+        DATE(time) AS date,
+        COUNT(DISTINCT shop_id) AS unique_shop_count
+    FROM callings
+    WHERE created_at >= '2024-07-01'
+    AND type = 'call'
+    GROUP BY DATE(time)
+)
+
+SELECT
+    COALESCE(us.date, ss.date, cs.date, trsc.date, cds.date, trua.date, usc.date) AS date,
+    COALESCE(us.total_user_registrations, 0) AS total_user_registrations,
+    COALESCE(ss.total_shop_registrations, 0) AS total_shop_registrations,
+    COALESCE(cs.total_calls, 0) AS total_calls,
+    COALESCE(cs.total_specific_call_answers, 0) AS total_specific_call_answers,
+    COALESCE(trsc.total_today_calls, 0) AS total_today_calls,
+    COALESCE(trsc.total_today_registered_call_answers, 0) AS total_today_registered_call_answers,
+    COALESCE(cds.count_aht_below_1, 0) AS count_aht_below_1,
+    COALESCE(cds.count_aht_1_to_4, 0) AS count_aht_1_to_4,
+    COALESCE(cds.count_aht_4_to_10, 0) AS count_aht_4_to_10,
+    COALESCE(cds.count_aht_10_to_15, 0) AS count_aht_10_to_15,
+    COALESCE(cds.count_aht_15_to_20, 0) AS count_aht_15_to_20,
+    COALESCE(cds.count_aht_20_plus, 0) AS count_aht_20_plus,
+    COALESCE(trua.today_count_aht_below_1, 0) AS today_count_aht_below_1,
+    COALESCE(trua.today_count_aht_1_to_4, 0) AS today_count_aht_1_to_4,
+    COALESCE(trua.today_count_aht_4_to_10, 0) AS today_count_aht_4_to_10,
+    COALESCE(trua.today_count_aht_10_to_15, 0) AS today_count_aht_10_to_15,
+    COALESCE(trua.today_count_aht_15_to_20, 0) AS today_count_aht_15_to_20,
+    COALESCE(trua.today_count_aht_20_plus, 0) AS today_count_aht_20_plus,
+    COALESCE(usc.unique_shop_count, 0) AS unique_shop_count
+FROM
+    (SELECT date FROM UserStats
+     UNION SELECT date FROM ShopStats
+     UNION SELECT date FROM CallStats
+     UNION SELECT date FROM TodayRegisteredShopCalls
+     UNION SELECT date FROM CallDurationStats
+     UNION SELECT date FROM TodayRegisteredUserAHT
+     UNION SELECT date FROM UniqueShopCalls
+    ) all_dates
+LEFT JOIN UserStats us ON all_dates.date = us.date
+LEFT JOIN ShopStats ss ON all_dates.date = ss.date
+LEFT JOIN CallStats cs ON all_dates.date = cs.date
+LEFT JOIN TodayRegisteredShopCalls trsc ON all_dates.date = trsc.date
+LEFT JOIN CallDurationStats cds ON all_dates.date = cds.date
+LEFT JOIN TodayRegisteredUserAHT trua ON all_dates.date = trua.date
+LEFT JOIN UniqueShopCalls usc ON all_dates.date = usc.date;
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 730
+
+WITH SalesData AS (
+  SELECT
+    `sales`.`id` AS `sale_id`,
+    `sales`.`shop_id`,
+    DATE(`sales`.`created_at`) AS `date`,
+    `sales`.`amount` AS `current_sales_amount`,
+    `sales`.`hishabee_employee_id`,
+    CASE 
+      WHEN `sales`.`hishabee_employee_id` = 0 THEN 'Online'
+      ELSE 'Telesales'
+    END AS `sales_type`
+  FROM
+    `sales`
+  WHERE
+    `sales`.`created_at` >= CONVERT_TZ(
+      '2024-07-01 00:00:00.000',
+      'UTC',
+      @@session.time_zone
+    )
+),
+PreviousMetrics AS (
+  SELECT DISTINCT
+    `s`.`shop_id`,
+    `s`.`date`,
+    COALESCE((SELECT COUNT(`s2`.`id`) FROM `sales` AS `s2` WHERE `s2`.`shop_id` = `s`.`shop_id` AND DATE(`s2`.`created_at`) < `s`.`date`), 0) AS `sales_count`,
+    COALESCE((SELECT SUM(`s2`.`amount`) FROM `sales` AS `s2` WHERE `s2`.`shop_id` = `s`.`shop_id` AND DATE(`s2`.`created_at`) < `s`.`date`), 0) AS `previous_sales_amount`,
+    COALESCE((SELECT COUNT(`c`.`id`) FROM `callings` AS `c` WHERE `c`.`shop_id` = `s`.`shop_id` AND DATE(`c`.`created_at`) < `s`.`date`), 0) AS `call_count`,
+    COALESCE((SELECT SUM(`c`.`call_duration`) FROM `callings` AS `c` WHERE `c`.`shop_id` = `s`.`shop_id` AND DATE(`c`.`created_at`) < `s`.`date`), 0) AS `total_call_duration`,
+    COALESCE((SELECT COUNT(`c`.`id`) FROM `callings` AS `c` WHERE `c`.`shop_id` = `s`.`shop_id` AND DATE(`c`.`created_at`) < `s`.`date` 
+              AND (
+                (`c`.`answer` <> 'DROP' OR `c`.`answer` IS NULL) 
+                AND (`c`.`answer` <> 'Not Connected' OR `c`.`answer` IS NULL)
+              )), 0) AS `call_answer_count`,
+    COALESCE((SELECT COUNT(`a`.`id`) FROM `appointments` AS `a` WHERE `a`.`shop_id` = `s`.`shop_id` AND DATE(`a`.`created_at`) < `s`.`date`), 0) AS `appointment_count`
+  FROM
+    SalesData AS `s`
+),
+LatestSubscriptionGrades AS (
+  SELECT
+    `sg`.`shop_id`,
+    `sg`.`previous_activation_grade`,
+    `sg`.`conversion_duration`,
+    ROW_NUMBER() OVER (PARTITION BY `sg`.`shop_id` ORDER BY `sg`.`subscription_created_at` DESC) AS `rn`
+  FROM
+    `subscription_grades` AS `sg`
+  WHERE
+    `sg`.`subscription_created_at` >= CONVERT_TZ(
+      '2024-07-01 00:00:00.000',
+      'UTC',
+      @@session.time_zone
+    )
+),
+SelectedSubscriptionGrades AS (
+  SELECT
+    `shop_id`,
+    `previous_activation_grade`,
+    `conversion_duration`
+  FROM
+    LatestSubscriptionGrades
+  WHERE
+    `rn` = 1
+)
+SELECT
+  sd.`date`,
+  sd.`sale_id`,
+  sd.`shop_id`,
+  sd.`sales_type`,
+  sd.`current_sales_amount`,
+  COALESCE(ssg.`previous_activation_grade`, '') AS `previous_grade`,
+  COALESCE(ssg.`conversion_duration`, 0) AS `time_difference_minutes`,
+  pm.`call_count`,
+  pm.`total_call_duration`,
+  pm.`sales_count`,
+  pm.`previous_sales_amount`,
+  pm.`call_answer_count`,
+  pm.`appointment_count`
+FROM
+  SalesData AS sd
+LEFT JOIN
+  SelectedSubscriptionGrades AS ssg ON sd.`shop_id` = ssg.`shop_id`
+LEFT JOIN
+  PreviousMetrics AS pm ON sd.`shop_id` = pm.`shop_id` AND sd.`date` = pm.`date`
+ORDER BY
+  sd.`date` ASC;
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query : 731
+SELECT
+  s.created_at AS date,
+  s.shop_id,
+  COALESCE(t.transaction_count, 0) AS sell_count,
+  COALESCE(d.due_count, 0) AS due_count,
+  COALESCE(e.expense_count, 0) AS expenses_count,
+  COALESCE(p.purchase_count, 0) AS purchase_count,
+  COALESCE(sp.product_count, 0) AS product_count,
+  COALESCE(c.customer_count, 0) +
+  COALESCE(sup.supplier_count, 0) +
+  COALESCE(emp.employee_count, 0) AS contact_count,
+  DATEDIFF(s.created_at, sh.created_at) AS sales_cycle,
+  CASE
+    WHEN DATEDIFF(s.created_at, sh.created_at) <= 14 THEN 'New Users'
+    ELSE 'Old Users'
+  END AS user_category,
+  COALESCE(sub.subscription_count, 0) AS subscription_count
+FROM sales s
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS transaction_count
+  FROM transactions
+  GROUP BY shop_id
+) t ON s.shop_id = t.shop_id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS due_count
+  FROM dues
+  GROUP BY shop_id
+) d ON s.shop_id = d.shop_id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS expense_count
+  FROM expenses
+  GROUP BY shop_id
+) e ON s.shop_id = e.shop_id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS purchase_count
+  FROM purchases
+  GROUP BY shop_id
+) p ON s.shop_id = p.shop_id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS product_count
+  FROM shop_products
+  GROUP BY shop_id
+) sp ON s.shop_id = sp.shop_id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS customer_count
+  FROM customers
+  GROUP BY shop_id
+) c ON s.shop_id = c.shop_id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS supplier_count
+  FROM suppliers
+  GROUP BY shop_id
+) sup ON s.shop_id = sup.shop_id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS employee_count
+  FROM employees
+  GROUP BY shop_id
+) emp ON s.shop_id = emp.shop_id
+LEFT JOIN shops sh ON s.shop_id = sh.id
+LEFT JOIN (
+  SELECT
+    shop_id,
+    COUNT(id) AS subscription_count
+  FROM subscriptions
+  GROUP BY shop_id
+) sub ON s.shop_id = sub.shop_id
+WHERE s.created_at >= '2024-07-01'
+ORDER BY s.created_at ASC;
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 810
+SELECT
+  DATE(`acquisition_sales`.`created_at`) AS `date`,
+
+  -- Online and Telesales Amounts
+  SUM(CASE 
+      WHEN `acquisition_sales`.`hishabee_employee_id` IS NULL 
+      THEN `acquisition_sales`.`amount` 
+      ELSE 0 
+  END) AS `online_sales_amount`,
+
+  SUM(CASE 
+      WHEN `acquisition_sales`.`hishabee_employee_id` IS NOT NULL 
+      THEN `acquisition_sales`.`amount` 
+      ELSE 0 
+  END) AS `telesales_amount`,
+
+  -- Online and Telesales VAT
+  SUM(CASE 
+      WHEN `acquisition_sales`.`hishabee_employee_id` IS NULL 
+      THEN `acquisition_sales`.`amount` * 0.05 
+      ELSE 0 
+  END) AS `online_vat`,
+
+  SUM(CASE 
+      WHEN `acquisition_sales`.`hishabee_employee_id` IS NOT NULL 
+      THEN `acquisition_sales`.`amount` * 0.05 
+      ELSE 0 
+  END) AS `telesales_vat`,
+
+  -- Counts of Online and Telesales Transactions
+  COUNT(CASE 
+      WHEN `acquisition_sales`.`hishabee_employee_id` IS NULL 
+      THEN 1 
+      ELSE NULL 
+  END) AS `online_sales_count`,
+
+  COUNT(CASE 
+      WHEN `acquisition_sales`.`hishabee_employee_id` IS NOT NULL 
+      THEN 1 
+      ELSE NULL 
+  END) AS `telesales_count`
+  
+FROM
+  `acquisition_sales`
+WHERE
+  `acquisition_sales`.`created_at` >= CONVERT_TZ('2024-07-01 00:00:00.000', 'UTC', @@session.time_zone)
+  AND `acquisition_sales`.`sale_type` IN ('APP_SELL', 'ONLINE_SELL', 'ACQUISITION_SELL')
+GROUP BY 
+  DATE(`acquisition_sales`.`created_at`)
+ORDER BY 
+  `date`;
+
+
