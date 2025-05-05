@@ -1,0 +1,20 @@
+Query Id: 932
+SELECT DISTINCT
+  DATE(`Callings`.`time`) AS `Date`,
+  `Callings`.`shop_id` AS `Shop Id`,
+  `Callings`.`number` AS `Number`,
+  `Callings`.`call_duration` AS `Duration`,
+  `hishabee_employees`.`name` AS `Employee Name`,
+  COALESCE(`Teams`.`name`, 'Blank') AS `Team Name`
+FROM
+  `hishabee_employees`
+LEFT JOIN `callings` AS `Callings` 
+  ON `hishabee_employees`.`id` = `Callings`.`hishabee_employee_id`
+LEFT JOIN `teams` AS `Teams` 
+  ON `hishabee_employees`.`team_id` = `Teams`.`id`
+LEFT JOIN `sales` AS `Sales - Shop` 
+  ON `Callings`.`shop_id` = `Sales - Shop`.`shop_id`
+WHERE
+  `Callings`.`call_duration` >= 300
+  AND `Callings`.`time` >= TIMESTAMP '2025-02-18 00:00:00.000'
+  AND `Sales - Shop`.`id` IS NULL;
