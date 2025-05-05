@@ -1,0 +1,22 @@
+Query Id:838
+SELECT
+  DATE(users.created_at) AS date,
+  COUNT(DISTINCT users.id) AS total_registered_users,
+  COUNT(DISTINCT shops.id) AS total_registered_shops,
+  COUNT(DISTINCT CASE WHEN DATE(shops.created_at) = DATE(sales.created_at) AND sales.amount != 0 THEN users.id END) AS total_users_purchased_same_day,
+  COUNT(DISTINCT CASE WHEN DATE(shops.created_at) != DATE(sales.created_at) AND sales.amount != 0 THEN users.id END) AS total_users_purchased_different_day,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'A1' THEN shops.id END) AS grade_A1_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'B1' THEN shops.id END) AS grade_B1_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'C1' THEN shops.id END) AS grade_C1_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'D1' THEN shops.id END) AS grade_D1_count,
+  AVG(CASE WHEN DATE(shops.created_at) != DATE(sales.created_at) THEN DATEDIFF(sales.created_at, shops.created_at) ELSE NULL END) AS sales_cycle_avg
+FROM
+  users
+LEFT JOIN shops ON users.id = shops.user_id
+LEFT JOIN sales ON shops.id = sales.shop_id
+WHERE
+  users.created_at >= '2024-10-01'
+GROUP BY
+  DATE(users.created_at)
+ORDER BY
+  date;
