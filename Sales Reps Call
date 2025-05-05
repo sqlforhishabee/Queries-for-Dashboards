@@ -1,0 +1,105 @@
+Query Id: 918
+WITH callings_cte AS (
+  SELECT
+    `callings`.`hishabee_employee_id` AS `hishabee_employee_id`,
+    `Hishabee Employees`.`name` AS `Hishabee Employees__name`,
+    DATE(`callings`.`time`) AS `created_at`,
+    COUNT(DISTINCT `callings`.`shop_id`) AS `total_call`,
+    COUNT(DISTINCT CASE 
+      WHEN `callings`.`answer` NOT IN ('not connected', 'drop') 
+      THEN `callings`.`shop_id` 
+      ELSE NULL 
+    END) AS `connected_Calls`,
+    SUM(`callings`.`call_duration`) AS `Total_Talking_Hour`
+  FROM `callings`
+  LEFT JOIN `hishabee_employees` AS `Hishabee Employees` 
+    ON `callings`.`hishabee_employee_id` = `Hishabee Employees`.`id`
+  WHERE
+    `callings`.`type` = 'call'
+    AND `callings`.`inorout` = 'Inbound'
+    AND `callings`.`time` >= TIMESTAMP '2025-02-01 00:00:00.000'
+  GROUP BY
+    `callings`.`hishabee_employee_id`,
+    `Hishabee Employees`.`name`,
+    DATE(`callings`.`time`)
+),
+sales_cte AS (
+  SELECT
+    DATE(`sales`.`created_at`) AS `created_at`,
+    `sales`.`hishabee_employee_id` AS `hishabee_employee_id`,
+    SUM(`sales`.`amount`) AS `sum`,
+    COUNT(DISTINCT `sales`.`shop_id`) AS `count`
+  FROM `sales`
+  LEFT JOIN `hishabee_employees` AS `Hishabee Employees` 
+    ON `sales`.`hishabee_employee_id` = `Hishabee Employees`.`id`
+  WHERE
+    `sales`.`created_at` >= CONVERT_TZ('2025-02-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    DATE(`sales`.`created_at`),
+    `sales`.`hishabee_employee_id`
+)
+SELECT 
+  c.`hishabee_employee_id`,
+  c.`Hishabee Employees__name`,
+  c.`created_at`,
+  c.`total_call`,
+  c.`connected_Calls`,
+  c.`Total_Talking_Hour`,
+  COALESCE(s.`sum`, 0) AS `sales_amount`, 
+  COALESCE(s.`count`, 0) AS `sales_count`
+FROM callings_cte c
+LEFT JOIN sales_cte s 
+  ON c.`hishabee_employee_id` = s.`hishabee_employee_id` 
+  AND c.`created_at` = s.`created_at`
+ORDER BY 
+  c.`hishabee_employee_id` ASC,
+  c.`Hishabee Employees__name` ASC,
+  c.`created_at` ASC;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 919
+SELECT
+  `source`.`hishabee_employee_name` AS `hishabee_employee_name`,
+  `source`.`created_at` AS `created_at`,
+  `source`.`count` AS `count`,
+  `source`.`sum` AS `sum`
+FROM
+  (
+    SELECT
+      `acquisition_sales`.`hishabee_employee_name` AS `hishabee_employee_name`,
+      DATE(`acquisition_sales`.`created_at`) AS `created_at`,
+      count(distinct `acquisition_sales`.`user_id`) AS `count`,
+      SUM(`acquisition_sales`.`amount`) AS `sum`
+    FROM
+      `acquisition_sales`
+   
+WHERE
+      (
+        `acquisition_sales`.`hishabee_employee_name` IS NOT NULL
+      )
+     
+   AND (
+        (`acquisition_sales`.`hishabee_employee_name` <> '')
+       
+    OR (
+          `acquisition_sales`.`hishabee_employee_name` IS NULL
+        )
+      )
+      AND (
+        `acquisition_sales`.`created_at` >= convert_tz(
+          '2025-02-01 00:00:00.000',
+          'UTC',
+          @@session.time_zone
+        )
+      )
+   
+GROUP BY
+      `acquisition_sales`.`hishabee_employee_name`,
+      DATE(`acquisition_sales`.`created_at`)
+   
+ORDER BY
+      `acquisition_sales`.`hishabee_employee_name` ASC,
+      DATE(`acquisition_sales`.`created_at`) ASC
+  ) AS `source`
+WHERE
+  (`source`.`sum` <> 0)
+  OR (`source`.`sum` IS NULL)
