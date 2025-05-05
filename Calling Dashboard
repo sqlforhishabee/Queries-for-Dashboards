@@ -1,0 +1,180 @@
+Query Id:848
+
+
+WITH ConnectedShops AS (
+    SELECT DISTINCT `shop_id`
+    FROM `callings`
+    WHERE `type` = 'call' 
+      AND `answer` NOT IN ('Not Connected', 'Drop')
+      AND `inorout` = 'Inbound'
+)
+SELECT
+    DATE(`Daily Call Lists`.`assigned_call_time`) AS `assign_date`,
+    COUNT(DISTINCT `Daily Call Lists`.`shop_id`) AS `total_assigned_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN `Callings`.`shop_id` IS NOT NULL 
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Daily Call Lists`.`shop_id`
+    END) AS `total_landed_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN DATE(`Callings`.`created_at`) = DATE(`Daily Call Lists`.`assigned_call_time`)
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+        THEN `Daily Call Lists`.`shop_id`
+    END) AS `total_same_day_landed_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN DATE(`Callings`.`created_at`) = DATE(`Daily Call Lists`.`assigned_call_time`)
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+        THEN `Daily Call Lists`.`shop_id`
+    END) AS `total_same_day_connected_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN DATE(`Callings`.`created_at`) = DATE(`Daily Call Lists`.`assigned_call_time`)
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Sales`.`created_at` >= DATE(`Daily Call Lists`.`assigned_call_time`)
+        THEN `Sales`.`shop_id`
+    END) AS `total_same_day_connected_conversions`,
+    COUNT(DISTINCT CASE 
+        WHEN `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Callings`.`shop_id`
+    END) AS `total_connected_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`answer` IN ('Not Connected', 'Drop') 
+             AND `Callings`.`shop_id` NOT IN (SELECT `shop_id` FROM ConnectedShops)
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Callings`.`shop_id`
+    END) AS `total_not_connected_calls`,
+    AVG(CASE 
+        WHEN `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Callings`.`call_duration`
+    END) AS `overall_average_call_duration`,
+    COUNT(DISTINCT CASE 
+        WHEN `Sales`.`shop_id` IS NOT NULL 
+             AND `Sales`.`created_at` >= DATE(`Daily Call Lists`.`assigned_call_time`) 
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Sales`.`shop_id`
+    END) AS `total_conversions`
+FROM 
+    `daily_call_lists` AS `Daily Call Lists`
+LEFT JOIN `callings` AS `Callings` 
+    ON `Daily Call Lists`.`shop_id` = `Callings`.`shop_id`
+   AND `Callings`.`inorout` = 'Inbound'
+   AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+LEFT JOIN `sales` AS `Sales` 
+    ON `Daily Call Lists`.`shop_id` = `Sales`.`shop_id`
+WHERE 
+    `Daily Call Lists`.`assigned_call_time` >= '2024-09-01'
+    AND DATE(`Daily Call Lists`.`assigned_call_time`) <= CURRENT_DATE()  -- Exclude future assigned calls
+GROUP BY 
+    `assign_date`
+ORDER BY 
+    `assign_date`;
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 847
+
+WITH ConnectedShops AS (
+    SELECT DISTINCT `shop_id`
+    FROM `callings`
+    WHERE `type` = 'call' 
+      AND `answer` NOT IN ('Not Connected', 'Drop')
+      AND `inorout` = 'Inbound'
+)
+SELECT
+    DATE(`Daily Call Lists`.`assigned_call_time`) AS `assign_date`,
+    REPLACE(REPLACE(REPLACE(`Daily Call Lists`.`primary_lead`, '[', ''), ']', ''), '"', '') AS `funnel_type`, -- Removing brackets
+    `Hishabee Employees - Agent`.`name` AS `agent_name`,
+    COUNT(DISTINCT `Daily Call Lists`.`shop_id`) AS `assigned_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN `Callings`.`shop_id` IS NOT NULL 
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Daily Call Lists`.`shop_id`
+    END) AS `landed_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN DATE(`Callings`.`created_at`) = DATE(`Daily Call Lists`.`assigned_call_time`)
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Daily Call Lists`.`shop_id`
+    END) AS `same_day_landed_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN DATE(`Callings`.`created_at`) = DATE(`Daily Call Lists`.`assigned_call_time`)
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Daily Call Lists`.`shop_id`
+    END) AS `same_day_connected_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN DATE(`Callings`.`created_at`) = DATE(`Daily Call Lists`.`assigned_call_time`)
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Sales`.`created_at` >= DATE(`Daily Call Lists`.`assigned_call_time`)
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Sales`.`shop_id`
+    END) AS `same_day_connected_conversions`,
+    COUNT(DISTINCT CASE 
+        WHEN `Callings`.`type` = 'call'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Callings`.`shop_id`
+    END) AS `connected_calls`,
+    COUNT(DISTINCT CASE 
+        WHEN `Callings`.`type` = 'call'
+             AND `Callings`.`answer` IN ('Not Connected', 'Drop') 
+             AND `Callings`.`shop_id` NOT IN (SELECT `shop_id` FROM ConnectedShops)
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Callings`.`shop_id`
+    END) AS `not_connected_calls`,
+    AVG(CASE 
+        WHEN `Callings`.`type` = 'call'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Callings`.`call_duration`
+    END) AS `average_call_duration`,
+    COUNT(DISTINCT CASE 
+        WHEN `Sales`.`shop_id` IS NOT NULL 
+             AND `Sales`.`created_at` >= DATE(`Daily Call Lists`.`assigned_call_time`) 
+             AND `Callings`.`type` = 'call'
+             AND `Callings`.`answer` NOT IN ('Not Connected', 'Drop')
+             AND `Callings`.`inorout` = 'Inbound'
+             AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+        THEN `Sales`.`shop_id`
+    END) AS `conversion_count`
+FROM 
+    `daily_call_lists` AS `Daily Call Lists`
+LEFT JOIN `hishabee_employees` AS `Hishabee Employees - Agent` 
+    ON `Daily Call Lists`.`agent_id` = `Hishabee Employees - Agent`.`id`
+LEFT JOIN `callings` AS `Callings` 
+    ON `Daily Call Lists`.`shop_id` = `Callings`.`shop_id`
+    AND `Callings`.`inorout` = 'Inbound'
+    AND `Callings`.`created_at` >= `Daily Call Lists`.`assigned_call_time`
+LEFT JOIN `sales` AS `Sales` 
+    ON `Daily Call Lists`.`shop_id` = `Sales`.`shop_id`
+WHERE 
+    `Daily Call Lists`.`assigned_call_time` >= '2024-09-01'
+    AND DATE(`Daily Call Lists`.`assigned_call_time`) <= CURRENT_DATE()  -- Exclude future assigned calls
+GROUP BY 
+    `assign_date`, `funnel_type`, `agent_name`
+ORDER BY 
+    `assign_date`, `agent_name`;
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
