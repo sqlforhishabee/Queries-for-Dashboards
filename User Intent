@@ -1,0 +1,83 @@
+Query Id: 839
+WITH DateRange AS (
+  SELECT 
+    DATE_ADD('2024-09-01', INTERVAL seq DAY) AS `date`
+  FROM (
+    SELECT @row := @row + 1 AS seq
+    FROM (SELECT 0 UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) AS t1,
+         (SELECT 0 UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) AS t2,
+         (SELECT @row := -1) AS r
+  ) seq
+  WHERE DATE_ADD('2024-09-01', INTERVAL seq DAY) <= CURDATE()
+),
+ShopStats AS (
+  SELECT
+    DATE(`shops`.`created_at`) AS `registration_date`,
+    `shops`.`use_intent` AS `use_intent`,
+    COUNT(DISTINCT `shops`.`id`) AS `shop_count`,
+    COUNT(`sales`.`id`) AS `sales_count`
+  FROM
+    `shops`
+  LEFT JOIN
+    `sales` ON `shops`.`id` = `sales`.`shop_id`
+  WHERE
+    `shops`.`created_at` >= '2024-09-01 00:00:00'
+    AND (
+      `shops`.`use_intent` NOT IN ('BOOK_KEEPING', 'BOTH', 'ONLINE_SELL')
+      OR `shops`.`use_intent` IS NULL
+    )
+  GROUP BY
+    `registration_date`,
+    `use_intent`
+)
+SELECT
+  dr.`date` AS `registration_date`,
+  COALESCE(ss.`use_intent`, 'NO_INTENT') AS `use_intent`,
+  COALESCE(ss.`shop_count`, 0) AS `shop_count`,
+  COALESCE(ss.`sales_count`, 0) AS `sales_count`
+FROM
+  DateRange dr
+LEFT JOIN
+  ShopStats ss ON dr.`date` = ss.`registration_date`
+ORDER BY
+  dr.`date`, ss.`use_intent`;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 841
+
+SELECT
+  source.created_at AS created_at,
+  source.count AS total_count,
+  subscriptions.count AS subscription_count
+FROM
+  (
+    SELECT
+      DATE(shops.created_at) AS created_at,
+      COUNT(*) AS count
+    FROM
+      shops
+    GROUP BY
+      DATE(shops.created_at)
+    ORDER BY
+      DATE(shops.created_at) ASC
+  ) AS source
+LEFT JOIN (
+  SELECT
+    DATE(shops.created_at) AS created_at,
+    COUNT(DISTINCT shops.id) AS count
+  FROM
+    shops
+  RIGHT JOIN subscription_items AS `Subscription Items` 
+    ON shops.id = `Subscription Items`.shop_id
+  WHERE
+    (`Subscription Items`.package = 'STANDARD' OR `Subscription Items`.package = 'ADVANCED')
+    AND shops.created_at >= CONVERT_TZ('2024-09-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    DATE(shops.created_at)
+  ORDER BY
+    DATE(shops.created_at) ASC
+) AS subscriptions
+ON source.created_at = subscriptions.created_at
+WHERE
+  source.created_at >= CONVERT_TZ('2024-09-01 00:00:00.000', 'UTC', @@session.time_zone)
+LIMIT 1048575;
+
