@@ -1,0 +1,304 @@
+Query ID - 934
+WITH AnsweredCalls AS (
+    SELECT
+        DATE(`callings`.`time`) AS `date`,
+        `callings`.`call_lead_type` AS `call_lead_type`,
+        COUNT(DISTINCT `callings`.`shop_id`) AS `Answered_Call`,
+        (SUM(`callings`.`call_duration`) / COUNT(DISTINCT `callings`.`shop_id`)) / 60 AS `AHT`
+    FROM
+        `callings`
+    WHERE
+        `callings`.`time` >= TIMESTAMP '2025-02-05 00:00:00.000'
+        AND `callings`.`type` = 'call'
+        AND `callings`.`inorout` = 'Inbound'
+        AND (
+            (`callings`.`answer` <> 'DROP' OR `callings`.`answer` IS NULL)
+            AND (`callings`.`answer` <> 'Not Connected' OR `callings`.`answer` IS NULL)
+            AND (`callings`.`answer` <> 'Unanswered' OR `callings`.`answer` IS NULL)
+            AND (`callings`.`answer` <> 'Unrech' OR `callings`.`answer` IS NULL)
+        )
+    GROUP BY
+        `callings`.`call_lead_type`,
+        DATE(`callings`.`time`)
+),
+DialedCalls AS (
+    SELECT
+        DATE(`callings`.`time`) AS `date`,
+        `callings`.`call_lead_type` AS `call_lead_type`,
+        COUNT(DISTINCT `callings`.`shop_id`) AS `Dialed_Call`
+    FROM
+        `callings`
+    WHERE
+        `callings`.`time` >= TIMESTAMP '2025-02-05 00:00:00.000'
+        AND `callings`.`type` = 'call'
+        AND `callings`.`inorout` = 'Inbound'
+        AND (`callings`.`answer` <> 'DROP' OR `callings`.`answer` IS NULL)
+    GROUP BY
+        `callings`.`call_lead_type`,
+        DATE(`callings`.`time`)
+),
+UniqueShops AS (
+    SELECT
+        DATE(subquery.`time`) AS `date`,
+        subquery.`call_lead_type` AS `call_lead_type`,
+        COUNT(DISTINCT subquery.`shop_id`) AS `Answer_on_first_call`
+    FROM (
+        SELECT
+            `callings`.`shop_id` AS `shop_id`,
+            `callings`.`time` AS `time`,
+            `callings`.`call_duration` AS `call_duration`,
+            `callings`.`call_lead_type` AS `call_lead_type`,
+            CASE
+                WHEN `callings`.`answer` IN ('Not Connected', 'Unanswered', 'Unrech') THEN 'Not Connected'
+                ELSE 'Connected'
+            END AS `call_status`,
+            RANK() OVER (
+                PARTITION BY DATE(`callings`.`time`), `callings`.`shop_id`
+                ORDER BY `callings`.`time` ASC
+            ) AS `rank`
+        FROM
+            `callings`
+        WHERE
+            `callings`.`time` >= TIMESTAMP '2025-02-05 00:00:00.000'
+            AND `callings`.`inorout` = 'Inbound'
+            AND `callings`.`type` = 'call'
+            AND (
+                `callings`.`answer` <> 'DROP'
+                OR `callings`.`answer` IS NULL
+            )
+    ) AS subquery
+    WHERE
+        subquery.`call_status` = 'Connected' 
+        AND subquery.`rank` = 1
+    GROUP BY
+        `date`,
+        subquery.`call_lead_type`
+),
+LatestCalls AS (
+    SELECT 
+        c.shop_id,
+        c.call_lead_type,
+        DATE(c.time) AS call_date,
+        c.time AS max_call_time
+    FROM callings c
+    LEFT JOIN sales s 
+        ON c.shop_id = s.shop_id 
+        AND DATE(c.time) = DATE(s.created_at)
+    WHERE 
+        c.answer NOT IN ('DROP', 'Not Connected', 'Unanswered', 'Unrech')
+        AND c.type = 'call'
+        AND c.inorout = 'Inbound'
+        AND s.amount IS NOT NULL
+        AND c.time >= TIMESTAMP '2025-02-05 00:00:00.000'
+        AND c.time < s.created_at  -- Ensure call time is before sales time
+),
+LatestCallCounts AS (
+    SELECT 
+        lc.call_date,
+        lc.call_lead_type,
+        COUNT(DISTINCT lc.shop_id) AS distinct_shop_count
+    FROM LatestCalls lc
+    WHERE lc.max_call_time = (
+        SELECT MAX(lc2.max_call_time) 
+        FROM LatestCalls lc2 
+        WHERE lc2.shop_id = lc.shop_id AND lc2.call_date = lc.call_date
+    )
+    GROUP BY lc.call_date, lc.call_lead_type
+)
+
+-- Final query with joins
+SELECT 
+    COALESCE(a.`call_lead_type`, d.`call_lead_type`, u.`call_lead_type`, lc.`call_lead_type`) AS `call_lead_type`,
+    COALESCE(a.`date`, d.`date`, u.`date`, lc.`call_date`) AS `date`,
+    COALESCE(d.`Dialed_Call`, 0) AS `Dialed_Call`,
+    COALESCE(a.`Answered_Call`, 0) AS `Answered_Call`,
+    COALESCE(a.`AHT`, 0) AS `AHT`,
+    COALESCE(u.`Answer_on_first_call`, 0) AS `Answer_on_first_call`,
+    COALESCE(lc.distinct_shop_count, 0) AS `distinct_shop_count`
+FROM AnsweredCalls a
+LEFT JOIN DialedCalls d ON a.`call_lead_type` = d.`call_lead_type` AND a.`date` = d.`date`
+LEFT JOIN UniqueShops u ON COALESCE(a.`call_lead_type`, d.`call_lead_type`) = u.`call_lead_type` 
+                         AND COALESCE(a.`date`, d.`date`) = u.`date`
+LEFT JOIN LatestCallCounts lc ON COALESCE(a.`call_lead_type`, d.`call_lead_type`, u.`call_lead_type`) = lc.`call_lead_type`
+                         AND COALESCE(a.`date`, d.`date`, u.`date`) = lc.`call_date`
+
+UNION
+
+SELECT 
+    COALESCE(a.`call_lead_type`, d.`call_lead_type`, u.`call_lead_type`, lc.`call_lead_type`) AS `call_lead_type`,
+    COALESCE(a.`date`, d.`date`, u.`date`, lc.`call_date`) AS `date`,
+    COALESCE(d.`Dialed_Call`, 0) AS `Dialed_Call`,
+    COALESCE(a.`Answered_Call`, 0) AS `Answered_Call`,
+    COALESCE(a.`AHT`, 0) AS `AHT`,
+    COALESCE(u.`Answer_on_first_call`, 0) AS `Answer_on_first_call`,
+    COALESCE(lc.distinct_shop_count, 0) AS `distinct_shop_count`
+FROM DialedCalls d
+LEFT JOIN AnsweredCalls a ON d.`call_lead_type` = a.`call_lead_type` AND d.`date` = a.`date`
+LEFT JOIN UniqueShops u ON COALESCE(a.`call_lead_type`, d.`call_lead_type`) = u.`call_lead_type` 
+                         AND COALESCE(a.`date`, d.`date`) = u.`date`
+LEFT JOIN LatestCallCounts lc ON COALESCE(a.`call_lead_type`, d.`call_lead_type`, u.`call_lead_type`) = lc.`call_lead_type`
+                         AND COALESCE(a.`date`, d.`date`, u.`date`) = lc.`call_date`
+
+UNION
+
+SELECT 
+    COALESCE(a.`call_lead_type`, d.`call_lead_type`, u.`call_lead_type`, lc.`call_lead_type`) AS `call_lead_type`,
+    COALESCE(a.`date`, d.`date`, u.`date`, lc.`call_date`) AS `date`,
+    COALESCE(d.`Dialed_Call`, 0) AS `Dialed_Call`,
+    COALESCE(a.`Answered_Call`, 0) AS `Answered_Call`,
+    COALESCE(a.`AHT`, 0) AS `AHT`,
+    COALESCE(u.`Answer_on_first_call`, 0) AS `Answer_on_first_call`,
+    COALESCE(lc.distinct_shop_count, 0) AS `distinct_shop_count`
+FROM UniqueShops u
+LEFT JOIN AnsweredCalls a ON u.`call_lead_type` = a.`call_lead_type` AND u.`date` = a.`date`
+LEFT JOIN DialedCalls d ON COALESCE(a.`call_lead_type`, u.`call_lead_type`) = d.`call_lead_type` 
+                         AND COALESCE(a.`date`, u.`date`) = d.`date`
+LEFT JOIN LatestCallCounts lc ON COALESCE(a.`call_lead_type`, u.`call_lead_type`, d.`call_lead_type`) = lc.`call_lead_type`
+                         AND COALESCE(a.`date`, u.`date`, d.`date`) = lc.`call_date`
+
+ORDER BY `call_lead_type`, `date`;
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 928
+WITH assigned_calls AS (
+    SELECT
+        DATE(`daily_call_lists`.`assigned_call_time`) AS `date`,
+        COUNT(DISTINCT `daily_call_lists`.`shop_id`) AS `assign_shop`
+    FROM `daily_call_lists`
+    WHERE `daily_call_lists`.`assigned_call_time` >= '2025-02-05 00:00:00'
+    AND DATE(`daily_call_lists`.`assigned_call_time`) <= (CURDATE())
+
+    GROUP BY DATE(`daily_call_lists`.`assigned_call_time`)
+),
+
+landed_calls AS (
+    SELECT
+        DATE(`callings`.`time`) AS `date`,
+        COUNT(DISTINCT `callings`.`shop_id`) AS `landed_call`
+    FROM `callings`
+    LEFT JOIN `daily_call_lists` AS `Daily Call Lists - Daily Call`
+        ON `callings`.`daily_call_id` = `Daily Call Lists - Daily Call`.`id`
+    WHERE `callings`.`type` = 'call'
+        AND `callings`.`inorout` = 'Inbound'
+        AND `callings`.`created_at` >= CONVERT_TZ('2025-02-05 00:00:00.000', 'UTC', @@session.time_zone)
+    GROUP BY DATE(`callings`.`time`)
+),
+
+connected_calls AS (
+    SELECT
+        DATE(`callings`.`time`) AS `date`,
+        COUNT(DISTINCT `callings`.`shop_id`) AS `connected_call`,
+        (sum(call_duration)/COUNT(DISTINCT `callings`.`shop_id`))/60 AS `AHT`
+    FROM `callings`
+    LEFT JOIN `daily_call_lists` AS `Daily Call Lists - Daily Call`
+        ON `callings`.`daily_call_id` = `Daily Call Lists - Daily Call`.`id`
+    WHERE `callings`.`type` = 'call'
+        AND `callings`.`inorout` = 'Inbound'
+        AND (`callings`.`answer` <> 'DROP' OR `callings`.`answer` IS NULL)
+        AND (`callings`.`answer` <> 'Not Connected' OR `callings`.`answer` IS NULL)
+        AND `callings`.`created_at` >= CONVERT_TZ('2025-02-05 00:00:00.000', 'UTC', @@session.time_zone)
+    GROUP BY DATE(`callings`.`time`)
+),
+
+same_date_connected_calls AS (
+    SELECT
+        DATE(`callings`.`time`) AS `date`,
+        COUNT(DISTINCT `callings`.`shop_id`) AS `same_date_connected_call`
+    FROM `callings`
+    LEFT JOIN `daily_call_lists` AS `Daily Call Lists - Daily Call`
+        ON `callings`.`daily_call_id` = `Daily Call Lists - Daily Call`.`id`
+    WHERE `callings`.`type` = 'call'
+        AND `callings`.`inorout` = 'Inbound'
+        AND (`callings`.`answer` <> 'DROP' OR `callings`.`answer` IS NULL)
+        AND (`callings`.`answer` <> 'Not Connected' OR `callings`.`answer` IS NULL)
+        AND `callings`.`time` >= CONVERT_TZ('2025-02-05 00:00:00.000', 'UTC', @@session.time_zone)
+        AND DATE(`Daily Call Lists - Daily Call`.`assigned_call_time`) = DATE(`callings`.`time`)
+    GROUP BY DATE(`callings`.`time`)
+),
+
+same_date_landed_calls AS (
+    SELECT
+        DATE(`callings`.`time`) AS `date`,
+        COUNT(DISTINCT `callings`.`shop_id`) AS `same_date_landed_call`
+    FROM `callings`
+    LEFT JOIN `daily_call_lists` AS `Daily Call Lists - Daily Call`
+        ON `callings`.`daily_call_id` = `Daily Call Lists - Daily Call`.`id`
+    WHERE `callings`.`type` = 'call'
+        AND `callings`.`inorout` = 'Inbound'
+        AND `callings`.`created_at` >= CONVERT_TZ('2025-02-05 00:00:00.000', 'UTC', @@session.time_zone)
+        AND DATE(`Daily Call Lists - Daily Call`.`assigned_call_time`) = DATE(`callings`.`time`)
+    GROUP BY DATE(`callings`.`time`)
+),
+
+aht_calls AS (
+    SELECT
+        DATE(`callings`.`time`) AS `date`,
+        COUNT(DISTINCT `callings`.`shop_id`) AS `count`,
+        SUM(`callings`.`call_duration`) AS `sum`, 
+        (SUM(`callings`.`call_duration`) / COUNT(DISTINCT `callings`.`shop_id`))/60 AS `AHT`
+    FROM `callings`
+    LEFT JOIN `daily_call_lists` AS `Daily Call Lists - Daily Call`
+        ON `callings`.`daily_call_id` = `Daily Call Lists - Daily Call`.`id`
+    WHERE `callings`.`type` = 'call'
+        AND `callings`.`inorout` = 'Inbound'
+        AND (`callings`.`answer` <> 'DROP' OR `callings`.`answer` IS NULL)
+        AND (`callings`.`answer` <> 'Not Connected' OR `callings`.`answer` IS NULL)
+        AND `callings`.`created_at` >= CONVERT_TZ('2025-02-05 00:00:00.000', 'UTC', @@session.time_zone)
+    GROUP BY DATE(`callings`.`time`)
+),
+
+conversion_data AS (
+    SELECT 
+        DATE(`subscription_items`.`created_at`) AS `created_date`,
+        COUNT(DISTINCT `subscription_items`.`shop_id`) AS `Conversion`, 
+        COALESCE((SUM(`Callings - Shop`.`call_duration`) / NULLIF(COUNT(DISTINCT `subscription_items`.`shop_id`), 0))/60, 0) AS `Conversion_AHT`
+    FROM `subscription_items`
+    LEFT JOIN `callings` AS `Callings - Shop` 
+        ON (
+            `subscription_items`.`shop_id` = `Callings - Shop`.`shop_id`
+            AND DATE(`subscription_items`.`created_at`) = DATE(`Callings - Shop`.`time`)
+        )
+    WHERE `Callings - Shop`.`inorout` = 'Inbound'
+        AND `Callings - Shop`.`type` = 'call'
+        AND (`subscription_items`.`package` = 'ADVANCED' OR `subscription_items`.`package` = 'STANDARD')
+        AND `subscription_items`.`created_at` >= CONVERT_TZ('2025-02-05 00:00:00.000', 'UTC', @@session.time_zone)
+        AND (`Callings - Shop`.`answer` <> 'Not Connected' OR `Callings - Shop`.`answer` IS NULL)
+        AND (`Callings - Shop`.`answer` <> 'DROP' OR `Callings - Shop`.`answer` IS NULL)
+        AND `Callings - Shop`.`time` < `subscription_items`.`created_at`
+    GROUP BY DATE(`subscription_items`.`created_at`)
+)
+
+SELECT 
+    all_dates.`date`,
+    COALESCE(a.assign_shop, 0) AS `assign_shop`,
+    COALESCE(l.landed_call, 0) AS `landed_call`,
+    COALESCE(c.connected_call, 0) AS `connected_call`,
+    COALESCE(c.AHT, 0) AS `AHT`,
+    COALESCE(sd.same_date_landed_call, 0) AS `same_date_landed_call`,
+    COALESCE(s.same_date_connected_call, 0) AS `same_date_connected_call`,
+    COALESCE(conversion_data.Conversion, 0) AS `Conversion`,
+    COALESCE(conversion_data.Conversion_AHT, 0) AS `Conversion_AHT`
+FROM (
+    -- Union all dates from all tables to ensure completeness
+    SELECT `date` FROM assigned_calls
+    UNION 
+    SELECT `date` FROM landed_calls
+    UNION 
+    SELECT `date` FROM connected_calls
+    UNION 
+    SELECT `date` FROM same_date_connected_calls
+    UNION 
+    SELECT `date` FROM same_date_landed_calls
+    UNION 
+    SELECT `date` FROM aht_calls
+    UNION 
+    SELECT `created_date` FROM conversion_data
+) all_dates
+LEFT JOIN assigned_calls a ON all_dates.`date` = a.`date`
+LEFT JOIN landed_calls l ON all_dates.`date` = l.`date`
+LEFT JOIN connected_calls c ON all_dates.`date` = c.`date`
+LEFT JOIN same_date_connected_calls s ON all_dates.`date` = s.`date`
+LEFT JOIN same_date_landed_calls sd ON all_dates.`date` = sd.`date`
+LEFT JOIN aht_calls aht ON all_dates.`date` = aht.`date`
+LEFT JOIN conversion_data conversion_data ON all_dates.`date` = conversion_data.`created_date`
+ORDER BY all_dates.`date` ASC;
