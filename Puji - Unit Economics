@@ -1,0 +1,970 @@
+Query ID - 734
+WITH FirstOrders AS (
+    SELECT
+        `retailer_invoices`.`id`,
+        `retailer_invoices`.`retailer_id`,
+        `retailer_invoices`.`created_at`,
+        ROW_NUMBER() OVER (PARTITION BY `retailer_invoices`.`retailer_id` ORDER BY `retailer_invoices`.`created_at` ASC) AS `Order_number`
+    FROM
+        `retailer_invoices`
+),
+FirstOrdersSummary AS (
+    SELECT
+        DATE(`ri`.`created_at`) AS `created_at`,
+        SUM(`ri`.`total_order_value`) AS `Total_Order_Value`,
+        COUNT(*) AS `Order_Delivered`,
+        COUNT(CASE WHEN `fo`.`Order_number` = 1 THEN 1 END) AS `First_Time_Order`,
+        COUNT(CASE WHEN `fo`.`Order_number` > 1 THEN 1 END) AS `Repeat_Order`
+    FROM
+        `retailer_invoices` `ri`
+    LEFT JOIN
+        FirstOrders `fo` ON `ri`.`id` = `fo`.`id`
+    GROUP BY
+        DATE(`ri`.`created_at`)
+),
+DisbursementSummary AS (
+    SELECT
+        DATE(`disbursement_tasks`.`created_at`) AS `created_at`,
+        SUM(`disbursement_tasks`.`invoice_amount`) AS `Total_Disbursed_GTV`,
+        SUM(`disbursement_tasks`.`total_disbursement_amount`) AS `Net_Disbursement_Amount`,
+        COUNT(*) AS `Disbursement_Count`,
+        SUM(`disbursement_tasks`.`hishabee_fee`) AS `Hishabee_Fee`
+    FROM
+        `disbursement_tasks`
+    WHERE
+        `disbursement_tasks`.`disbursement_status` = 'completed'
+    GROUP BY
+        DATE(`disbursement_tasks`.`created_at`)
+),
+CollectionSummary AS (
+    SELECT
+        DATE(`collections`.`created_at`) AS `created_at`,
+        COUNT(DISTINCT `collections`.`invoice_id`) AS `Invoice_Count`,
+        SUM(`collections`.`collected_amount`) AS `Collected_Amount`
+    FROM
+        `collections`
+    GROUP BY
+        DATE(`collections`.`created_at`)
+),
+PaybackSummary AS (
+    SELECT 
+        `query`.`created_at` AS `created_at`,
+        AVG(`query`.`payback_period`) AS `payback_period`,
+        AVG(`query`.`miss_payment_rate`) AS `miss_payment_rate`
+    FROM (
+        SELECT 
+            `subquery`.`created_at` AS `created_at`,
+            COUNT(*) AS `payback_period`,
+            CAST(SUM(CASE WHEN `subquery`.`Collected_amount` = 0 THEN 1 ELSE 0 END) AS FLOAT) / NULLIF(COUNT(*), 0) AS `miss_payment_rate`
+        FROM (
+            SELECT
+                DATE(`retailer_invoices`.`created_at`) AS `created_at`,
+                `Collections`.`collection_date` AS `Collection_date`,
+                `Collections`.`collected_amount` AS `Collected_amount`,
+                `Collections`.`invoice_id` AS `invoice_id`,
+                ROW_NUMBER() OVER (PARTITION BY `Collections`.`invoice_id` ORDER BY `Collections`.`collection_date` ASC) AS `Collections_number`
+            FROM
+                `retailer_invoices`
+            LEFT JOIN 
+                `collections` AS `Collections` ON `retailer_invoices`.`id` = `Collections`.`invoice_id`
+            WHERE 
+                `retailer_invoices`.`total_pending_amount` = 0
+            LIMIT
+                1048575
+        ) AS subquery
+        GROUP BY 
+            `subquery`.`invoice_id`, 
+            `subquery`.`created_at`
+    ) AS query
+    GROUP BY 
+        `query`.`created_at`
+),
+CollectionAgentSummary AS (
+    SELECT
+        DATE(`collections`.`created_at`) AS `created_at`,
+        COUNT(DISTINCT case when `collections`.`user_id` <> 36 THEN `collections`.`user_id` END) AS `user_count`,
+        COUNT(*) AS `count_collection`,
+        SUM(`collections`.`collected_amount`) AS `sum_collection`,
+        (SUM(`collections`.`collected_amount`) / COUNT(DISTINCT case when `collections`.`user_id` <> 36 THEN `collections`.`user_id` END)) AS `average_per_agent`,
+        COUNT(CASE WHEN `collections`.`collected_amount` != `collections`.`today_collection_amount` AND `collections`.`collected_amount` > 0 THEN 1 END) AS `partial_paid`,
+        COUNT(CASE WHEN `collections`.`collected_amount` = `collections`.`today_collection_amount` AND `collections`.`collected_amount` > 0 THEN 1 END) AS `full_paid`,
+        COUNT(CASE WHEN `collections`.`collected_amount` = 0 THEN 1 END) AS `zero_collection`
+    FROM
+        `collections`
+    GROUP BY
+        DATE(`collections`.`created_at`)
+)
+SELECT
+    DATE(`dates`.`created_at`) AS `date`,
+    COALESCE(`retailers`.`count`, 0) AS `retailer_onboard`,
+    COALESCE(`retailers`.`active_status`, 0) AS `Retailers_active_status`,
+    COALESCE(`suppliers`.`count`, 0) AS `supplier_onboard`,
+    COALESCE(`suppliers`.`suppliers_active_status`, 0) AS `suppliers_active_status`,
+    COALESCE(`srs`.`count`, 0) AS `SRS_onboard`,
+    COALESCE(`srs`.`SRS_active_status`, 0) AS `SRS_active_status`,
+    COALESCE(`fos`.`Order_Delivered`, 0) AS `Order_Delivered`,
+    COALESCE(`fos`.`Total_Order_Value`, 0) AS `Total_Order_Value`,
+    COALESCE(`fos`.`First_Time_Order`, 0) AS `First_Time_Order`,
+    COALESCE(`fos`.`Repeat_Order`, 0) AS `Repeat_Order`,
+    COALESCE(`ds`.`Total_Disbursed_GTV`, 0) AS `Total_Disbursed_GTV`,
+    COALESCE(`ds`.`Hishabee_Fee`, 0) AS `Hishabee_Fee`,
+    COALESCE(`ds`.`Disbursement_Count`, 0) AS `Disbursement_Count`,
+    COALESCE(`ds`.`Net_Disbursement_Amount`, 0) AS `Net_Disbursement_Amount`,
+    COALESCE(`cs`.`Invoice_Count`, 0) AS `Invoice_Count`,
+    COALESCE(`cs`.`Collected_Amount`, 0) AS `Collected_Amount`,
+    COALESCE(`ps`.`payback_period`, 0) AS `payback_period`,
+    COALESCE(`ps`.`miss_payment_rate`, 0) AS `miss_payment_rate`,
+    COALESCE(`cas`.`user_count`, 0) AS `user_count`,
+    COALESCE(`cas`.`average_per_agent`, 0) AS `average_per_agent`,
+    COALESCE(`cas`.`partial_paid`, 0) AS `partial_paid`,
+    COALESCE(`cas`.`full_paid`, 0) AS `full_paid`,
+    COALESCE(`cas`.`zero_collection`, 0) AS `zero_collection`
+FROM
+    (
+        SELECT DISTINCT DATE(`created_at`) AS `created_at`
+        FROM `s_r_s`
+        UNION
+        SELECT DISTINCT DATE(`created_at`) AS `created_at`
+        FROM `retailers`
+        UNION
+        SELECT DISTINCT DATE(`created_at`) AS `created_at`
+        FROM `suppliers`
+        UNION
+        SELECT DISTINCT DATE(`created_at`) AS `created_at`
+        FROM `retailer_invoices`
+        UNION
+        SELECT DISTINCT DATE(`created_at`) AS `created_at`
+        FROM `disbursement_tasks`
+        UNION
+        SELECT DISTINCT DATE(`created_at`) AS `created_at`
+        FROM `collections`
+    ) AS `dates`
+LEFT JOIN
+    (
+        SELECT
+            DATE(`s_r_s`.`created_at`) AS `created_at`,
+            COUNT(*) AS `count`,
+            SUM(`s_r_s`.`active_status` = true) AS `SRS_active_status`
+        FROM
+            `s_r_s`
+        GROUP BY
+            DATE(`s_r_s`.`created_at`)
+    ) AS `srs`
+ON `dates`.`created_at` = `srs`.`created_at`
+LEFT JOIN
+    (
+        SELECT
+            DATE(`retailers`.`onboarding_date`) AS `created_at`,
+            COUNT(*) AS `count`,
+            SUM(`retailers`.`active_status` = true) AS `active_status`
+        FROM
+            `retailers`
+        GROUP BY
+            DATE(`retailers`.`onboarding_date`)
+    ) AS `retailers`
+ON `dates`.`created_at` = `retailers`.`created_at`
+LEFT JOIN
+    (
+        SELECT
+            DATE(`suppliers`.`created_at`) AS `created_at`,
+            COUNT(*) AS `count`,
+            SUM(`suppliers`.`active_status` = true) AS `suppliers_active_status`
+        FROM
+            `suppliers`
+        GROUP BY
+            DATE(`suppliers`.`created_at`)
+    ) AS `suppliers`
+ON `dates`.`created_at` = `suppliers`.`created_at`
+LEFT JOIN
+    FirstOrdersSummary `fos`
+ON `dates`.`created_at` = `fos`.`created_at`
+LEFT JOIN
+    DisbursementSummary `ds`
+ON `dates`.`created_at` = `ds`.`created_at`
+LEFT JOIN
+    CollectionSummary `cs`
+ON `dates`.`created_at` = `cs`.`created_at`
+LEFT JOIN
+    PaybackSummary `ps`
+ON `dates`.`created_at` = `ps`.`created_at`
+LEFT JOIN
+    CollectionAgentSummary `cas`
+ON `dates`.`created_at` = `cas`.`created_at`
+ORDER BY
+    `dates`.`created_at` ASC;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 811
+WITH RetailerOnboardingData AS (
+    SELECT
+        `id` AS `RetailerID`,
+        DATE_FORMAT(`onboarding_date`, '%Y-%m-01') AS `date`
+    FROM `retailers`
+    WHERE `onboarding_date` IS NOT NULL
+),
+RetailerOrderData AS (
+    SELECT
+        `retailer_id` AS `RetailerID`,
+        DATE_FORMAT(`order_date`, '%Y-%m-01') AS `OrderDate`
+    FROM `retailer_orders`
+    WHERE `order_date` IS NOT NULL
+    AND `status` = 'completed'
+),
+RetailerBlockedData AS (
+    SELECT
+        DATE_FORMAT(`onboarding_date`, '%Y-%m-01') AS `date`,
+        COUNT(*) AS `TotalBlocked`
+    FROM `retailers`
+    WHERE `is_active` = FALSE
+    GROUP BY DATE_FORMAT(`onboarding_date`, '%Y-%m-01')
+),
+RetailerCohort AS (
+    SELECT
+        ro.`date`,
+        rod.`OrderDate`,
+        TIMESTAMPDIFF(MONTH, DATE(ro.`date`), DATE(rod.`OrderDate`)) AS `MonthDifference`,
+        ro.`RetailerID`
+    FROM RetailerOnboardingData ro
+    LEFT JOIN RetailerOrderData rod ON ro.`RetailerID` = rod.`RetailerID`
+),
+RetailerCounts AS (
+    SELECT
+        ro.`date`,
+        COUNT(DISTINCT ro.`RetailerID`) AS `Retailer_TotalOnboarded`,
+        COUNT(DISTINCT CASE WHEN rc.`MonthDifference` = 1 THEN rc.`RetailerID` END) AS `Retailer_NextMonth`,
+        COUNT(DISTINCT CASE WHEN rc.`MonthDifference` = 3 THEN rc.`RetailerID` END) AS `Retailer_Month3`,
+        COUNT(DISTINCT CASE WHEN rc.`MonthDifference` = 6 THEN rc.`RetailerID` END) AS `Retailer_Month6`,
+        COUNT(DISTINCT CASE WHEN rc.`MonthDifference` = 12 THEN rc.`RetailerID` END) AS `Retailer_Month12`
+    FROM RetailerOnboardingData ro
+    LEFT JOIN RetailerCohort rc ON ro.`date` = rc.`date`
+    GROUP BY ro.`date`
+),
+SR_OnboardingData AS (
+    SELECT
+        `id` AS `SR_ID`,
+        DATE_FORMAT(`onboarding_date`, '%Y-%m-01') AS `date`
+    FROM `s_r_s`
+    WHERE `onboarding_date` IS NOT NULL
+),
+SR_OrderData AS (
+    SELECT
+        `s_r_id` AS `SR_ID`,
+        DATE_FORMAT(`order_date`, '%Y-%m-01') AS `OrderDate`
+    FROM `retailer_orders`
+    WHERE `order_date` IS NOT NULL
+    AND `status` = 'completed'
+),
+SRCohort AS (
+    SELECT
+        so.`date`,
+        sod.`OrderDate`,
+        TIMESTAMPDIFF(MONTH, DATE(so.`date`), DATE(sod.`OrderDate`)) AS `MonthDifference`,
+        so.`SR_ID`
+    FROM SR_OnboardingData so
+    LEFT JOIN SR_OrderData sod ON so.`SR_ID` = sod.`SR_ID`
+),
+SRCounts AS (
+    SELECT
+        so.`date`,
+        COUNT(DISTINCT so.`SR_ID`) AS `sr_TotalOnboarded`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 1 THEN sc.`SR_ID` END) AS `sr_NextMonth`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 3 THEN sc.`SR_ID` END) AS `sr_Month3`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 6 THEN sc.`SR_ID` END) AS `sr_Month6`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 12 THEN sc.`SR_ID` END) AS `sr_Month12`
+    FROM SR_OnboardingData so
+    LEFT JOIN SRCohort sc ON so.`date` = sc.`date`
+    GROUP BY so.`date`
+),
+SupplierOnboardingData AS (
+    SELECT DISTINCT
+        `suppliers`.`id` AS `SupplierID`,
+        DATE_FORMAT(`suppliers`.`created_at`, '%Y-%m-01') AS `date`
+    FROM `suppliers`
+    WHERE `suppliers`.`created_at` IS NOT NULL
+),
+SupplierOrderData AS (
+    SELECT
+        `suppliers`.`id` AS `SupplierID`,
+        DATE_FORMAT(`Retailer Orders`.`order_date`, '%Y-%m-01') AS `OrderDate`
+    FROM `suppliers`
+    LEFT JOIN `s_r_s` AS `S R S` ON `suppliers`.`id` = `S R S`.`supplier_id`
+    LEFT JOIN `retailer_orders` AS `Retailer Orders` ON `S R S`.`id` = `Retailer Orders`.`s_r_id`
+    WHERE `Retailer Orders`.`order_date` IS NOT NULL
+    AND `Retailer Orders`.`status` = 'completed'
+),
+SupplierCohort AS (
+    SELECT
+        so.`date`,
+        sod.`OrderDate`,
+        TIMESTAMPDIFF(MONTH, DATE(so.`date`), DATE(sod.`OrderDate`)) AS `MonthDifference`,
+        so.`SupplierID`
+    FROM SupplierOnboardingData so
+    LEFT JOIN SupplierOrderData sod ON so.`SupplierID` = sod.`SupplierID`
+),
+SupplierCounts AS (
+    SELECT
+        so.`date`,
+        COUNT(DISTINCT so.`SupplierID`) AS `supplier_TotalOnboarded`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 1 THEN sc.`SupplierID` END) AS `supplier_NextMonth`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 3 THEN sc.`SupplierID` END) AS `supplier_Month3`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 6 THEN sc.`SupplierID` END) AS `supplier_Month6`,
+        COUNT(DISTINCT CASE WHEN sc.`MonthDifference` = 12 THEN sc.`SupplierID` END) AS `supplier_Month12`
+    FROM SupplierOnboardingData so
+    LEFT JOIN SupplierCohort sc ON so.`date` = sc.`date`
+    GROUP BY so.`date`
+),
+AllMonths AS (
+    SELECT `date` FROM RetailerCounts
+    UNION
+    SELECT `date` FROM SRCounts
+    UNION
+    SELECT `date` FROM SupplierCounts
+)
+SELECT 
+    am.`date`,
+    COALESCE(rc.`Retailer_TotalOnboarded`, 0) AS `Retailer_TotalOnboarded`,
+    COALESCE(rc.`Retailer_NextMonth`, 0) AS `Retailer_NextMonth`,
+    COALESCE(rc.`Retailer_Month3`, 0) AS `Retailer_Month3`,
+    COALESCE(rc.`Retailer_Month6`, 0) AS `Retailer_Month6`,
+    COALESCE(rc.`Retailer_Month12`, 0) AS `Retailer_Month12`,
+    COALESCE(rb.`TotalBlocked`, 0) AS `Retailer_BlockedUsers`,
+    COALESCE(sc.`sr_TotalOnboarded`, 0) AS `sr_TotalOnboarded`,
+    COALESCE(sc.`sr_NextMonth`, 0) AS `sr_NextMonth`,
+    COALESCE(sc.`sr_Month3`, 0) AS `sr_Month3`,
+    COALESCE(sc.`sr_Month6`, 0) AS `sr_Month6`,
+    COALESCE(sc.`sr_Month12`, 0) AS `sr_Month12`,
+    COALESCE(supc.`supplier_TotalOnboarded`, 0) AS `supplier_TotalOnboarded`,
+    COALESCE(supc.`supplier_NextMonth`, 0) AS `supplier_NextMonth`,
+    COALESCE(supc.`supplier_Month3`, 0) AS `supplier_Month3`,
+    COALESCE(supc.`supplier_Month6`, 0) AS `supplier_Month6`,
+    COALESCE(supc.`supplier_Month12`, 0) AS `supplier_Month12`
+FROM AllMonths am
+LEFT JOIN RetailerCounts rc ON am.`date` = rc.`date`
+LEFT JOIN RetailerBlockedData rb ON am.`date` = rb.`date`
+LEFT JOIN SRCounts sc ON am.`date` = sc.`date`
+LEFT JOIN SupplierCounts supc ON am.`date` = supc.`date`
+ORDER BY am.`date`;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 811
+WITH retailer_count AS (
+    SELECT 
+        DATE(retailer_invoices.delivery_date) AS delivery_date,
+        COUNT(DISTINCT retailer_invoices.retailer_id) AS retailer_count
+    FROM retailer_invoices
+    GROUP BY DATE(retailer_invoices.delivery_date)
+),
+srs_data AS (
+    SELECT
+        s_r_s.onboarding_date AS onboarding_date,
+        COUNT(*) AS srs_count,
+        SUM(s_r_s.active_status = TRUE) AS srs_active_status
+    FROM s_r_s
+    GROUP BY s_r_s.onboarding_date
+),
+RankedInvoices AS (
+    SELECT
+        c.invoice_id,
+        c.created_at,
+        ri.delivery_date,
+        RANK() OVER (PARTITION BY c.invoice_id ORDER BY c.created_at ASC) AS rank_value
+    FROM collections c
+    LEFT JOIN retailer_invoices ri ON c.invoice_id = ri.id
+),
+adjusted_values AS (
+    SELECT
+        DATE(created_at) AS created_date,
+        SUM(
+            CASE 
+                WHEN delivery_date > '2025-02-14' THEN (rank_value - 10) * 10
+                ELSE 10
+            END
+        ) AS total_adjusted_value
+    FROM RankedInvoices
+    WHERE rank_value > 10
+        AND delivery_date >= '2024-09-01'
+    GROUP BY DATE(created_at)
+),
+retailer_late_fines AS (
+    SELECT
+        DATE(`retailer_late_fines`.`created_at`) AS `created_at`,
+        SUM(`retailer_late_fines`.`late_fine`) AS `sum`
+    FROM `retailer_late_fines`
+    GROUP BY DATE(`retailer_late_fines`.`created_at`)
+)
+SELECT 
+    COALESCE(r.onboarding_date, rc.delivery_date, av.created_date, lf.created_at) AS date,
+    COALESCE(r.srs_count, 0) AS srs_count,
+    COALESCE(r.srs_active_status, 0) AS srs_active_status,
+    COALESCE(rc.retailer_count, 0) AS retailer_count,
+    COALESCE(lf.sum, 0) AS retailer_late_fines_sum,
+    COALESCE(av.total_adjusted_value, 0) AS total_adjusted_value
+FROM srs_data r
+LEFT JOIN retailer_count rc ON r.onboarding_date = rc.delivery_date
+LEFT JOIN adjusted_values av ON r.onboarding_date = av.created_date
+LEFT JOIN retailer_late_fines lf ON r.onboarding_date = lf.created_at
+UNION
+SELECT 
+    COALESCE(r.onboarding_date, rc.delivery_date, av.created_date, lf.created_at) AS date,
+    COALESCE(r.srs_count, 0) AS srs_count,
+    COALESCE(r.srs_active_status, 0) AS srs_active_status,
+    COALESCE(rc.retailer_count, 0) AS retailer_count,
+    COALESCE(lf.sum, 0) AS retailer_late_fines_sum,
+    COALESCE(av.total_adjusted_value, 0) AS total_adjusted_value
+FROM retailer_count rc
+LEFT JOIN srs_data r ON r.onboarding_date = rc.delivery_date
+LEFT JOIN adjusted_values av ON rc.delivery_date = av.created_date
+LEFT JOIN retailer_late_fines lf ON rc.delivery_date = lf.created_at
+UNION
+SELECT 
+    COALESCE(r.onboarding_date, rc.delivery_date, av.created_date, lf.created_at) AS date,
+    COALESCE(r.srs_count, 0) AS srs_count,
+    COALESCE(r.srs_active_status, 0) AS srs_active_status,
+    COALESCE(rc.retailer_count, 0) AS retailer_count,
+    COALESCE(lf.sum, 0) AS retailer_late_fines_sum,
+    COALESCE(av.total_adjusted_value, 0) AS total_adjusted_value
+FROM adjusted_values av
+LEFT JOIN srs_data r ON r.onboarding_date = av.created_date
+LEFT JOIN retailer_count rc ON rc.delivery_date = av.created_date
+LEFT JOIN retailer_late_fines lf ON av.created_date = lf.created_at
+ORDER BY date ASC;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 840
+WITH retailer_count AS (
+    SELECT 
+        DATE(retailer_invoices.delivery_date) AS delivery_date,
+        COUNT(DISTINCT retailer_invoices.retailer_id) AS retailer_count
+    FROM retailer_invoices
+    GROUP BY DATE(retailer_invoices.delivery_date)
+),
+srs_data AS (
+    SELECT
+        s_r_s.onboarding_date AS onboarding_date,
+        COUNT(*) AS srs_count,
+        SUM(s_r_s.active_status = TRUE) AS srs_active_status
+    FROM s_r_s
+    GROUP BY s_r_s.onboarding_date
+),
+RankedInvoices AS (
+    SELECT
+        c.invoice_id,
+        c.created_at,
+        ri.delivery_date,
+        RANK() OVER (PARTITION BY c.invoice_id ORDER BY c.created_at ASC) AS rank_value
+    FROM collections c
+    LEFT JOIN retailer_invoices ri ON c.invoice_id = ri.id
+),
+adjusted_values AS (
+    SELECT
+        DATE(created_at) AS created_date,
+        SUM(
+            CASE 
+                WHEN delivery_date > '2025-02-14' THEN (rank_value - 10) * 10
+                ELSE 10
+            END
+        ) AS total_adjusted_value
+    FROM RankedInvoices
+    WHERE rank_value > 10
+        AND delivery_date >= '2024-09-01'
+    GROUP BY DATE(created_at)
+),
+retailer_late_fines AS (
+    SELECT
+        DATE(`retailer_late_fines`.`created_at`) AS `created_at`,
+        SUM(`retailer_late_fines`.`late_fine`) AS `sum`
+    FROM `retailer_late_fines`
+    GROUP BY DATE(`retailer_late_fines`.`created_at`)
+)
+SELECT 
+    COALESCE(r.onboarding_date, rc.delivery_date, av.created_date, lf.created_at) AS date,
+    COALESCE(r.srs_count, 0) AS srs_count,
+    COALESCE(r.srs_active_status, 0) AS srs_active_status,
+    COALESCE(rc.retailer_count, 0) AS retailer_count,
+    COALESCE(lf.sum, 0) AS retailer_late_fines_sum,
+    COALESCE(av.total_adjusted_value, 0) AS total_adjusted_value
+FROM srs_data r
+LEFT JOIN retailer_count rc ON r.onboarding_date = rc.delivery_date
+LEFT JOIN adjusted_values av ON r.onboarding_date = av.created_date
+LEFT JOIN retailer_late_fines lf ON r.onboarding_date = lf.created_at
+UNION
+SELECT 
+    COALESCE(r.onboarding_date, rc.delivery_date, av.created_date, lf.created_at) AS date,
+    COALESCE(r.srs_count, 0) AS srs_count,
+    COALESCE(r.srs_active_status, 0) AS srs_active_status,
+    COALESCE(rc.retailer_count, 0) AS retailer_count,
+    COALESCE(lf.sum, 0) AS retailer_late_fines_sum,
+    COALESCE(av.total_adjusted_value, 0) AS total_adjusted_value
+FROM retailer_count rc
+LEFT JOIN srs_data r ON r.onboarding_date = rc.delivery_date
+LEFT JOIN adjusted_values av ON rc.delivery_date = av.created_date
+LEFT JOIN retailer_late_fines lf ON rc.delivery_date = lf.created_at
+UNION
+SELECT 
+    COALESCE(r.onboarding_date, rc.delivery_date, av.created_date, lf.created_at) AS date,
+    COALESCE(r.srs_count, 0) AS srs_count,
+    COALESCE(r.srs_active_status, 0) AS srs_active_status,
+    COALESCE(rc.retailer_count, 0) AS retailer_count,
+    COALESCE(lf.sum, 0) AS retailer_late_fines_sum,
+    COALESCE(av.total_adjusted_value, 0) AS total_adjusted_value
+FROM adjusted_values av
+LEFT JOIN srs_data r ON r.onboarding_date = av.created_date
+LEFT JOIN retailer_count rc ON rc.delivery_date = av.created_date
+LEFT JOIN retailer_late_fines lf ON av.created_date = lf.created_at
+ORDER BY date ASC;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 913
+WITH base_data AS (
+    SELECT
+        c.id,
+        c.invoice_id,
+        c.collected_amount,
+        c.today_collection_amount,
+        c.created_at,
+        c.user_id,
+        CONCAT(WEEK(c.created_at, 6), YEAR(c.created_at)) AS week_code -- Week starts on Sunday
+    FROM collections c
+),
+aggregated_data AS (
+    SELECT 
+        week_code,
+        MIN(DATE(created_at)) AS week_start_date,
+        COUNT(DISTINCT invoice_id) AS Invoice_Count
+    FROM base_data
+    GROUP BY week_code
+),
+completed_invoices AS (
+    SELECT 
+        CONCAT(WEEK(retailer_invoices.created_at, 6), YEAR(retailer_invoices.created_at)) AS week_code, -- Week starts on Sunday
+        COUNT(*) AS completed_invoice_count,
+        SUM(CASE WHEN retailer_invoices.payback_period BETWEEN 1 AND 15 THEN 1 ELSE 0 END) AS Invoice_Completed_1_15_Days,
+        SUM(CASE WHEN retailer_invoices.payback_period BETWEEN 16 AND 20 THEN 1 ELSE 0 END) AS Invoice_Completed_16_20_Days,
+        SUM(CASE WHEN retailer_invoices.payback_period BETWEEN 21 AND 25 THEN 1 ELSE 0 END) AS Invoice_Completed_21_25_Days,
+        SUM(CASE WHEN retailer_invoices.payback_period > 25 THEN 1 ELSE 0 END) AS Invoice_Completed_More_Than_25_Days
+    FROM retailer_invoices
+    WHERE retailer_invoices.payback_period <> 0
+       OR retailer_invoices.payback_period IS NULL
+    GROUP BY week_code
+),
+incomplete_invoices AS (
+    SELECT 
+        CONCAT(WEEK(subquery.delivery_date, 6), YEAR(subquery.delivery_date)) AS week_code, -- Week starts on Sunday
+        SUM(subquery.total_remaining_days) AS Incomplete_invoice_count,
+        SUM(subquery.total_remaining_days) * 10 AS Incomplete_invoice_amount
+    FROM (
+        SELECT
+            retailer_invoices.id AS id, 
+            (retailer_invoices.total_remaining_days * -1) AS total_remaining_days, 
+            retailer_invoices.delivery_date AS delivery_date
+        FROM retailer_invoices
+        WHERE retailer_invoices.total_remaining_days < 0 
+    ) AS subquery
+    GROUP BY week_code
+),
+late_pay_invoices AS (
+    SELECT 
+        CONCAT(WEEK(subquery.delivery_date, 6), YEAR(subquery.delivery_date)) AS week_code, -- Week starts on Sunday
+        SUM(subquery.payback_period) AS completed_count_late_pay,
+        SUM(10 * subquery.payback_period) AS completed_amount_Late_pay
+    FROM (
+        SELECT
+            retailer_invoices.id AS id,
+            (retailer_invoices.payback_period - 10) AS payback_period,
+            retailer_invoices.delivery_date AS delivery_date
+        FROM retailer_invoices
+        WHERE retailer_invoices.payback_period > 10
+    ) AS subquery
+    GROUP BY week_code
+),
+blocked_buyers AS (
+    SELECT 
+        CONCAT(WEEK(r.onboarding_date, 6), YEAR(r.onboarding_date)) AS week_code, -- Week starts on Sunday
+        COUNT(*) AS blocked_buyer_count
+    FROM retailers r
+    WHERE r.is_active = FALSE
+    GROUP BY week_code
+),
+retailer_count AS (
+    SELECT 
+        CONCAT(WEEK(delivery_date, 6), YEAR(delivery_date)) AS week_code,
+        COUNT(DISTINCT retailer_id) AS retailer_count
+    FROM retailer_invoices
+    GROUP BY week_code
+)
+SELECT 
+    a.week_code,
+    a.week_start_date,
+    a.Invoice_Count,
+    COALESCE(ci.completed_invoice_count, 0) AS completed_invoice_count,
+    COALESCE(ci.Invoice_Completed_1_15_Days, 0) AS Invoice_Completed_1_15_Days,
+    COALESCE(ci.Invoice_Completed_16_20_Days, 0) AS Invoice_Completed_16_20_Days,
+    COALESCE(ci.Invoice_Completed_21_25_Days, 0) AS Invoice_Completed_21_25_Days,
+    COALESCE(ci.Invoice_Completed_More_Than_25_Days, 0) AS Invoice_Completed_More_Than_25_Days,
+    COALESCE(ii.Incomplete_invoice_count, 0) AS Incomplete_invoice_count_days,
+    COALESCE(ii.Incomplete_invoice_amount, 0) AS Incomplete_invoice_amount,
+    COALESCE(lp.completed_count_late_pay, 0) AS completed_count_late_pay_days,
+    COALESCE(lp.completed_amount_Late_pay, 0) AS completed_amount_Late_pay,
+    COALESCE(bb.blocked_buyer_count, 0) AS blocked_buyer_weekly,
+    COALESCE(rc.retailer_count, 0) AS retailer_count
+FROM aggregated_data a
+LEFT JOIN completed_invoices ci ON a.week_code = ci.week_code
+LEFT JOIN incomplete_invoices ii ON a.week_code = ii.week_code
+LEFT JOIN late_pay_invoices lp ON a.week_code = lp.week_code
+LEFT JOIN blocked_buyers bb ON a.week_code = bb.week_code
+LEFT JOIN retailer_count rc ON a.week_code = rc.week_code
+ORDER BY a.week_start_date;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 814
+WITH 
+-- Invoices with collection records in the last 45 days but total collected is zero
+ZeroCollectedInvoices AS (
+    SELECT
+        c.invoice_id,
+        SUM(c.collected_amount) AS total_collected
+    FROM collections c
+    WHERE DATE(c.collection_date) BETWEEN CURDATE() - INTERVAL 45 DAY AND CURDATE()
+    GROUP BY c.invoice_id
+    HAVING total_collected = 0 OR total_collected IS NULL  -- Zero or NULL collection
+),
+
+-- Invoices with no collection records in the last 45 days
+NoCollectionInvoices AS (
+    SELECT 
+        ri.id AS invoice_id
+    FROM retailer_invoices ri
+    LEFT JOIN collections c ON ri.id = c.invoice_id 
+        AND DATE(c.collection_date) BETWEEN CURDATE() - INTERVAL 45 DAY AND CURDATE()
+    WHERE c.invoice_id IS NULL -- No collection record found for last 45 days
+),
+
+-- Combine invoices from both conditions
+AllBadDebtInvoices AS (
+    SELECT invoice_id FROM ZeroCollectedInvoices
+    UNION 
+    SELECT invoice_id FROM NoCollectionInvoices
+),
+
+-- CTE for bad debt per month
+bad_debt_per_month AS (
+    SELECT
+        STR_TO_DATE(
+            CONCAT(
+                DATE_FORMAT(ri.created_at, '%Y-%m'),
+                '-01'
+            ),
+            '%Y-%m-%d'
+        ) AS invoice_month,
+        SUM(ri.total_pending_amount) AS bad_debt_amount,
+        COUNT(DISTINCT ri.retailer_id) AS bad_debt_retailer_count
+    FROM retailer_invoices ri
+    JOIN AllBadDebtInvoices abi ON ri.id = abi.invoice_id
+    WHERE ri.payback_period = 0  -- Additional condition for bad debt classification
+    and ri.deleted_at is NULL
+    AND ri.created_at < DATE_SUB(CURDATE(), INTERVAL 45 DAY)  -- Invoice should be older than 45 days
+    GROUP BY invoice_month
+),
+
+-- CTE for collection per month
+collection_per_month AS (
+    SELECT
+        STR_TO_DATE(
+            CONCAT(
+                DATE_FORMAT(collections.collection_date, '%Y-%m'),
+                '-01'
+            ),
+            '%Y-%m-%d'
+        ) AS collection_month,
+        COUNT(DISTINCT collections.invoice_id) AS collection_count
+    FROM collections
+    WHERE collections.today_collection_amount > 0
+    GROUP BY collection_month
+),
+
+-- CTE for completed invoices per month
+completed_invoices_per_month AS (
+    SELECT
+        STR_TO_DATE(
+            CONCAT(
+                DATE_FORMAT(retailer_invoices.delivery_date, '%Y-%m'),
+                '-01'
+            ),
+            '%Y-%m-%d'
+        ) AS delivery_month,
+        COUNT(DISTINCT retailer_invoices.id) AS completed_invoice_count
+    FROM retailer_invoices
+    WHERE retailer_invoices.total_pending_amount < 1
+    GROUP BY delivery_month
+),
+
+-- CTE for overdue invoices per month with average overdue days
+overdue_invoices_per_month AS (
+    SELECT
+        STR_TO_DATE(
+            CONCAT(
+                DATE_FORMAT(retailer_invoices.delivery_date, '%Y-%m'),
+                '-01'
+            ),
+            '%Y-%m-%d'
+        ) AS overdue_month,
+        COUNT(DISTINCT retailer_invoices.id) AS overdue_invoice_count,
+        SUM(retailer_invoices.total_pending_amount) AS overdue_amount,
+        AVG(DATEDIFF(CURRENT_DATE, retailer_invoices.delivery_date)) AS average_overdue_days
+    FROM retailer_invoices
+    WHERE retailer_invoices.total_pending_amount >= 1
+    GROUP BY overdue_month
+),
+
+-- CTE for late fines per month
+late_fines_per_month AS (
+    SELECT
+        STR_TO_DATE(
+            CONCAT(
+                DATE_FORMAT(retailer_late_fines.created_at, '%Y-%m'),
+                '-01'
+            ),
+            '%Y-%m-%d'
+        ) AS fine_month,
+        SUM(retailer_late_fines.late_fine) AS total_late_fine
+    FROM retailer_late_fines
+    GROUP BY fine_month
+),
+
+-- CTE for date difference ranges for completed invoices
+date_difference_ranges AS (
+    SELECT
+        STR_TO_DATE(
+            CONCAT(
+                DATE_FORMAT(retailer_invoices.delivery_date, '%Y-%m'),
+                '-01'
+            ),
+            '%Y-%m-%d'
+        ) AS month,
+        COUNT(DISTINCT CASE WHEN DATEDIFF(COALESCE(Collections.max_collection_date, retailer_invoices.delivery_date), retailer_invoices.delivery_date) BETWEEN 0 AND 15 THEN retailer_invoices.id END) AS 0_to_15_days,
+        COUNT(DISTINCT CASE WHEN DATEDIFF(COALESCE(Collections.max_collection_date, retailer_invoices.delivery_date), retailer_invoices.delivery_date) BETWEEN 16 AND 20 THEN retailer_invoices.id END) AS 16_to_20_days,
+        COUNT(DISTINCT CASE WHEN DATEDIFF(COALESCE(Collections.max_collection_date, retailer_invoices.delivery_date), retailer_invoices.delivery_date) BETWEEN 21 AND 25 THEN retailer_invoices.id END) AS 21_to_25_days,
+        COUNT(DISTINCT CASE WHEN DATEDIFF(COALESCE(Collections.max_collection_date, retailer_invoices.delivery_date), retailer_invoices.delivery_date) >= 26 THEN retailer_invoices.id END) AS More_than_26_days
+    FROM retailer_invoices
+    LEFT JOIN (
+        SELECT 
+            invoice_id, 
+            MAX(collection_date) AS max_collection_date
+        FROM collections
+        GROUP BY invoice_id
+    ) AS Collections ON retailer_invoices.id = Collections.invoice_id
+    WHERE retailer_invoices.total_pending_amount < 1
+    GROUP BY month
+),
+
+-- CTE for retailer invoice counts per month
+retailer_invoice_count_per_month AS (
+    SELECT
+        STR_TO_DATE(
+            CONCAT(
+                DATE_FORMAT(retailer_invoices.delivery_date, '%Y-%m'),
+                '-01'
+            ),
+            '%Y-%m-%d'
+        ) AS delivery_month,
+        COUNT(DISTINCT retailer_invoices.retailer_id) AS retailer_count
+    FROM retailer_invoices
+    GROUP BY delivery_month
+)
+
+-- Final query combining all CTEs
+SELECT
+    cp.collection_month AS date,
+    COALESCE(cp.collection_count, 0) AS collection_count,
+    COALESCE(ci.completed_invoice_count, 0) AS completed_invoice_count,
+    COALESCE(oi.overdue_invoice_count, 0) AS overdue_invoice_count,
+    COALESCE(oi.overdue_amount, 0) AS overdue_amount,
+    COALESCE(oi.average_overdue_days, 0) AS average_overdue_days,
+    COALESCE(lf.total_late_fine, 0) AS total_late_fine,
+    COALESCE(ddr.0_to_15_days, 0) AS 0_to_15_days,
+    COALESCE(ddr.16_to_20_days, 0) AS 16_to_20_days,
+    COALESCE(ddr.21_to_25_days, 0) AS 21_to_25_days,
+    COALESCE(ddr.More_than_26_days, 0) AS More_than_26_days,
+    COALESCE(ripc.retailer_count, 0) AS retailer_invoice_count,
+    COALESCE(bdp.bad_debt_amount, 0) AS bad_debt_amount,  
+    COALESCE(bdp.bad_debt_retailer_count, 0) AS bad_debt_retailer_count  
+FROM collection_per_month cp
+LEFT JOIN completed_invoices_per_month ci ON cp.collection_month = ci.delivery_month
+LEFT JOIN overdue_invoices_per_month oi ON cp.collection_month = oi.overdue_month
+LEFT JOIN late_fines_per_month lf ON cp.collection_month = lf.fine_month
+LEFT JOIN date_difference_ranges ddr ON cp.collection_month = ddr.month
+LEFT JOIN retailer_invoice_count_per_month ripc ON cp.collection_month = ripc.delivery_month
+LEFT JOIN bad_debt_per_month bdp ON cp.collection_month = bdp.invoice_month
+ORDER BY cp.collection_month;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 984
+SELECT 
+    COALESCE(R.month, A.month, B.onboarding_month, C.onboarding_month) AS month,
+    R.total_retailers AS R_total_retailers,
+    R.R_Churn_retailers,
+    R.Repeat_Churn_Rate,
+    A.total_retailers AS A_total_retailers,
+    A.A_e_retailers,
+    A.A_Churn_Rate,
+    B.r_blocked_retailers,
+    B.r_blocked_retailer_rate,
+    C.a_blocked_buyer,
+    C.a_blocked_buyer_rate
+FROM (
+    -- Subquery R (Repeat Churn)
+    SELECT 
+        DATE_FORMAT(source.retailers__via__retailer_id__created_at, '%Y-%m') AS month,
+        COUNT(*) AS total_retailers,
+        SUM(CASE 
+              WHEN COALESCE(max, '2000-01-01') < CURDATE() - INTERVAL 30 DAY 
+                   AND source.is_active = TRUE
+              THEN 1 
+              ELSE 0 
+            END) AS R_Churn_retailers,
+        ROUND(
+            SUM(CASE 
+                  WHEN COALESCE(max, '2000-01-01') < CURDATE() - INTERVAL 30 DAY 
+                       AND source.is_active = TRUE
+                  THEN 1 
+                  ELSE 0 
+                END) / COUNT(*), 
+            4
+        ) AS Repeat_Churn_Rate
+    FROM (
+        SELECT
+            ri.retailer_id AS retailer_id,
+            DATE_FORMAT(r.onboarding_date, '%Y-%m-01') AS retailers__via__retailer_id__created_at,
+            r.is_active,  -- ✅ Included is_active field here
+            COUNT(*) AS count,
+            MAX(DATE(ri.delivery_date)) AS max
+        FROM retailer_invoices ri
+        LEFT JOIN retailers r
+            ON ri.retailer_id = r.id
+        GROUP BY ri.retailer_id, retailers__via__retailer_id__created_at, r.is_active
+        HAVING count > 1 
+    ) AS source
+    GROUP BY source.retailers__via__retailer_id__created_at
+) AS R
+LEFT JOIN (
+    -- Subquery A (All Churn)
+    SELECT 
+        DATE_FORMAT(source.retailers__via__retailer_id__created_at, '%Y-%m') AS month,
+        COUNT(*) AS total_retailers,
+        SUM(CASE 
+              WHEN COALESCE(max, '2000-01-01') < CURDATE() - INTERVAL 30 DAY 
+                   AND source.is_active = TRUE
+              THEN 1 
+              ELSE 0 
+            END) AS A_e_retailers,
+        ROUND(
+            SUM(CASE 
+                  WHEN COALESCE(max, '2000-01-01') < CURDATE() - INTERVAL 30 DAY 
+                       AND source.is_active = TRUE
+                  THEN 1 
+                  ELSE 0 
+                END) / COUNT(*), 
+            4
+        ) AS A_Churn_Rate
+    FROM (
+        SELECT
+            ri.retailer_id AS retailer_id,
+            DATE_FORMAT(r.onboarding_date, '%Y-%m-01') AS retailers__via__retailer_id__created_at,
+            r.is_active,  -- ✅ Included is_active field here
+            MAX(DATE(ri.delivery_date)) AS max
+        FROM retailer_invoices ri
+        LEFT JOIN retailers r
+            ON ri.retailer_id = r.id
+        WHERE r.active_status = TRUE
+        GROUP BY ri.retailer_id, retailers__via__retailer_id__created_at, r.is_active
+    ) AS source
+    GROUP BY source.retailers__via__retailer_id__created_at
+) AS A
+ON R.month = A.month
+LEFT JOIN (
+    -- Subquery B (Blocked Retailers)
+    SELECT 
+        DATE_FORMAT(onboarding_date, '%Y-%m') AS onboarding_month,
+        COUNT(id) AS total_retailers,
+        COUNT(CASE WHEN is_active = FALSE THEN id END) AS r_blocked_retailers,
+        ROUND(
+            COUNT(CASE WHEN is_active = FALSE THEN id END) / COUNT(id) , 2
+        ) AS r_blocked_retailer_rate
+    FROM (
+        SELECT
+            r.id,
+            r.is_active,
+            r.onboarding_date,
+            COUNT(ri.retailer_id) AS invoice_count
+        FROM retailers r
+        LEFT JOIN retailer_invoices ri 
+            ON r.id = ri.retailer_id
+        GROUP BY r.id, r.is_active, r.onboarding_date
+        HAVING invoice_count > 1
+    ) AS filtered_retailers
+    GROUP BY onboarding_month
+) AS B
+ON R.month = B.onboarding_month
+LEFT JOIN (
+    -- Subquery C (Blocked Buyers)
+    SELECT 
+        DATE_FORMAT(onboarding_date, '%Y-%m') AS onboarding_month,
+        COUNT(id) AS total_retailers,
+        COUNT(CASE WHEN is_active = FALSE THEN id END) AS a_blocked_buyer,
+        ROUND(
+            COUNT(CASE WHEN is_active = FALSE THEN id END) / COUNT(id) , 2
+        ) AS a_blocked_buyer_rate
+    FROM retailers
+    WHERE active_status = TRUE
+    GROUP BY onboarding_month
+) AS C
+ON R.month = C.onboarding_month
+ORDER BY month ASC;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 989
+WITH ActiveRetailerOnboarding AS (
+    SELECT
+        `id` AS `RetailerID`,
+        DATE_FORMAT(`onboarding_date`, '%Y-%m-01') AS `date`
+    FROM `retailers`
+    WHERE `onboarding_date` IS NOT NULL
+    AND `is_active` = TRUE  -- Only active retailers
+),
+ActiveRetailerOrderData AS (
+    SELECT
+        `retailer_id` AS `RetailerID`,
+        DATE_FORMAT(`order_date`, '%Y-%m-01') AS `OrderDate`
+    FROM `retailer_orders`
+    WHERE `order_date` IS NOT NULL
+    AND `status` = 'completed'
+),
+ActiveRetailerCohort AS (
+    SELECT
+        aro.`date`,
+        arod.`OrderDate`,
+        TIMESTAMPDIFF(MONTH, DATE(aro.`date`), DATE(arod.`OrderDate`)) AS `MonthDifference`,
+        aro.`RetailerID`
+    FROM ActiveRetailerOnboarding aro
+    LEFT JOIN ActiveRetailerOrderData arod ON aro.`RetailerID` = arod.`RetailerID`
+),
+ActiveRetailerCounts AS (
+    SELECT
+        aro.`date`,
+        COUNT(DISTINCT CASE WHEN arc.`MonthDifference` = 1 THEN arc.`RetailerID` END) AS `Active_Retailer_NextMonth`,
+        COUNT(DISTINCT CASE WHEN arc.`MonthDifference` = 3 THEN arc.`RetailerID` END) AS `Active_Retailer_Month3`,
+        COUNT(DISTINCT CASE WHEN arc.`MonthDifference` = 6 THEN arc.`RetailerID` END) AS `Active_Retailer_Month6`,
+        COUNT(DISTINCT CASE WHEN arc.`MonthDifference` = 12 THEN arc.`RetailerID` END) AS `Active_Retailer_Month12`
+    FROM ActiveRetailerOnboarding aro
+    LEFT JOIN ActiveRetailerCohort arc ON aro.`date` = arc.`date`
+    GROUP BY aro.`date`
+)
+SELECT 
+    arc.`date`,
+    COALESCE(arc.`Active_Retailer_NextMonth`, 0) AS `Active_Retailer_NextMonth`,
+    COALESCE(arc.`Active_Retailer_Month3`, 0) AS `Active_Retailer_Month3`,
+    COALESCE(arc.`Active_Retailer_Month6`, 0) AS `Active_Retailer_Month6`,
+    COALESCE(arc.`Active_Retailer_Month12`, 0) AS `Active_Retailer_Month12`
+FROM ActiveRetailerCounts arc
+ORDER BY arc.`date`;
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
