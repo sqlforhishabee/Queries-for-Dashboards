@@ -1,0 +1,312 @@
+Query ID - 852
+WITH CallDurationPerShop AS (
+  SELECT
+    DATE(`Sales`.`created_at`) AS `sales_date`,
+    
+    -- Calculate average date difference only when sales date is different from shop creation date
+    AVG(
+      CASE 
+        WHEN DATE(`Sales`.`created_at`) != DATE(`shops`.`created_at`) 
+        THEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) 
+        ELSE NULL 
+      END
+    ) AS `avg_date_diff`,
+
+    -- Categorize unique shops based on date differences
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) > 365 THEN `shops`.`id`
+      END
+    ) AS `above_1_year`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) <= 365 
+             AND DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) > 180 THEN `shops`.`id`
+      END
+    ) AS `six_months_to_1_year`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) <= 180 
+             AND DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) > 30 THEN `shops`.`id`
+      END
+    ) AS `one_month_to_six_months`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) <= 30 
+             AND DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) > 14 THEN `shops`.`id`
+      END
+    ) AS `fourteen_days_to_one_month`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) <= 14 
+             AND DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) > 7 THEN `shops`.`id`
+      END
+    ) AS `seven_to_fourteen_days`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) <= 7 
+             AND DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) >= 1 THEN `shops`.`id`
+      END
+    ) AS `one_to_seven_days`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) < 1 THEN `shops`.`id`
+      END
+    ) AS `same_day`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) < 1 AND `Sales`.`hishabee_employee_id` = 0 THEN `shops`.`id`
+      END
+    ) AS `same_day_online`,
+
+    COUNT(DISTINCT 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) < 1 AND `Sales`.`hishabee_employee_id` != 0 THEN `shops`.`id`
+      END
+    ) AS `same_day_ts`,
+    sum( 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) < 1 AND `Sales`.`hishabee_employee_id` = 0 THEN `Sales`.`amount`
+      END
+    ) AS `same_day_online_amount`,
+    sum( 
+      CASE 
+        WHEN DATEDIFF(`Sales`.`created_at`, `shops`.`created_at`) < 1 AND `Sales`.`hishabee_employee_id` != 0 THEN `Sales`.`amount`
+      END
+    ) AS `same_day_ts_amount`
+
+  FROM
+    `shops`
+
+  LEFT JOIN `sales` AS `Sales` 
+    ON `shops`.`id` = `Sales`.`shop_id`
+
+  WHERE
+    `Sales`.`created_at` >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+    AND (
+      `Sales`.`subscription` = 'ADVANCED' 
+      OR `Sales`.`subscription` = 'STANDARD'
+    )
+
+  GROUP BY
+    DATE(`Sales`.`created_at`)
+)
+
+SELECT
+  `sales_date`,
+  `avg_date_diff`,
+  `above_1_year`,
+  `six_months_to_1_year`,
+  `one_month_to_six_months`,
+  `fourteen_days_to_one_month`,
+  `seven_to_fourteen_days`,
+  `one_to_seven_days`,
+  `same_day`,
+  `same_day_online`,
+  `same_day_ts`,`same_day_online_amount`,`same_day_ts_amount`
+FROM
+  `CallDurationPerShop`;
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 850
+SELECT
+  DATE(`shops`.`created_at`) AS `created_date`,
+  `Sales Machines`.`industry` AS `industry`,
+  COUNT(DISTINCT `shops`.`id`) AS `unique_shop_count`
+FROM
+  `shops`
+
+LEFT JOIN `sales_machines` AS `Sales Machines` 
+  ON `shops`.`id` = `Sales Machines`.`shop_id` 
+  AND DATE(`shops`.`created_at`) = DATE(`Sales Machines`.`created_at`)
+
+WHERE
+  `shops`.`created_at` >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+
+GROUP BY
+  DATE(`shops`.`created_at`),
+  `Sales Machines`.`industry`;
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 851
+
+WITH CallDurationPerShop AS (
+  SELECT
+    `shops`.`id` AS `shop_id`,
+    DATE(`shops`.`created_at`) AS `created_date`,
+    SUM(`Callings`.`call_duration`) AS `total_call_duration`
+  FROM
+    `shops`
+    LEFT JOIN `callings` AS `Callings`
+      ON `shops`.`id` = `Callings`.`shop_id`
+      AND DATE(`shops`.`created_at`) = DATE(`Callings`.`time`)
+      AND `Callings`.`answer` NOT IN ('Not Connected', 'CHANUNAVAIL', 'CONGESTION', 'CANCEL', 'DROP', 'Unanswered')
+  WHERE
+    `shops`.`created_at` >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    `shops`.`id`, DATE(`shops`.`created_at`)
+),
+
+PipelineSalesPerDate AS (
+  SELECT
+    `shops`.`id` AS `shop_id`,
+    DATE(`shops`.`created_at`) AS `created_date`,
+    COUNT(DISTINCT `Pipeline Sales`.`shop_id`) AS `pipeline_sales_count`
+  FROM
+    `shops`
+    LEFT JOIN `pipeline_sales` AS `Pipeline Sales`
+      ON `shops`.`id` = `Pipeline Sales`.`shop_id`
+      AND DATE(`shops`.`created_at`) = DATE(`Pipeline Sales`.`created_at`)
+  WHERE
+    `shops`.`created_at` >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    `shops`.`id`, DATE(`shops`.`created_at`)
+),
+
+CallLandedPerDate AS (
+  SELECT
+    DATE(`shops`.`created_at`) AS `created_date`,
+    COUNT(DISTINCT `Callings`.`shop_id`) AS `call_landed_count`
+  FROM
+    `shops`
+    LEFT JOIN `callings` AS `Callings`
+      ON `shops`.`id` = `Callings`.`shop_id`
+      AND DATE(`shops`.`created_at`) = DATE(`Callings`.`time`)
+      AND `Callings`.`inorout` = 'Inbound'
+  WHERE
+    `shops`.`created_at` >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    DATE(`shops`.`created_at`)
+),
+
+UserCountPerDate AS (
+  SELECT
+    DATE(`users`.`created_at`) AS `created_date`,
+    COUNT(DISTINCT `users`.`id`) AS `user_count`
+  FROM
+    `users`
+  WHERE
+    `users`.`created_at` >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    DATE(`users`.`created_at`)
+),
+
+RankedPipelineSales AS (
+  SELECT
+    ps.shop_id,
+    ps.created_at,
+    ROW_NUMBER() OVER (PARTITION BY ps.shop_id ORDER BY ps.created_at ASC) AS row_num
+  FROM
+    pipeline_sales AS ps
+),
+
+SalesDurationCounts AS (
+  SELECT
+    DATE(s.created_at) AS sales_date,
+    COUNT(DISTINCT CASE WHEN DATEDIFF(s.created_at, rps.created_at) = 0 THEN rps.shop_id END) AS same_day_count,
+    COUNT(DISTINCT CASE WHEN DATEDIFF(s.created_at, rps.created_at) BETWEEN 1 AND 7 THEN rps.shop_id END) AS one_to_seven_days_count,
+    COUNT(DISTINCT CASE WHEN DATEDIFF(s.created_at, rps.created_at) > 7 THEN rps.shop_id END) AS more_than_7_days_count
+  FROM
+    RankedPipelineSales AS rps
+    JOIN sales AS s ON rps.shop_id = s.shop_id
+  WHERE
+    rps.row_num = 1
+    AND s.created_at >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    DATE(s.created_at)
+)
+
+SELECT
+  DATE(`shops`.`created_at`) AS `created_date`,
+  COUNT(DISTINCT `shops`.`id`) AS `shop_count`,
+  COALESCE(SUM(`PipelineSalesPerDate`.`pipeline_sales_count`), 0) AS `pipeline_sales_count`,
+  COALESCE(AVG(`CallDurationPerShop`.`total_call_duration`), 0) AS `avg_call_duration`,
+  COUNT(CASE WHEN `CallDurationPerShop`.`total_call_duration` IS NOT NULL THEN 1 ELSE NULL END) AS `connected_call`,
+  COALESCE(MAX(`CallLandedPerDate`.`call_landed_count`), 0) AS `call_landed_count`,
+  COALESCE(MAX(`UserCountPerDate`.`user_count`), 0) AS `user_count`,
+  COALESCE(MAX(`SalesDurationCounts`.`same_day_count`), 0) AS `same_day_count`,
+  COALESCE(MAX(`SalesDurationCounts`.`one_to_seven_days_count`), 0) AS `one_to_seven_days_count`,
+  COALESCE(MAX(`SalesDurationCounts`.`more_than_7_days_count`), 0) AS `more_than_7_days_count`
+FROM
+  `shops`
+  LEFT JOIN `CallDurationPerShop`
+    ON `shops`.`id` = `CallDurationPerShop`.`shop_id`
+    AND DATE(`shops`.`created_at`) = `CallDurationPerShop`.`created_date`
+  LEFT JOIN `PipelineSalesPerDate`
+    ON `shops`.`id` = `PipelineSalesPerDate`.`shop_id`
+    AND DATE(`shops`.`created_at`) = `PipelineSalesPerDate`.`created_date`
+  LEFT JOIN `CallLandedPerDate`
+    ON DATE(`shops`.`created_at`) = `CallLandedPerDate`.`created_date`
+  LEFT JOIN `UserCountPerDate`
+    ON DATE(`shops`.`created_at`) = `UserCountPerDate`.`created_date`
+  LEFT JOIN `SalesDurationCounts`
+    ON DATE(`shops`.`created_at`) = `SalesDurationCounts`.`sales_date`
+WHERE
+  `shops`.`created_at` >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+GROUP BY
+  DATE(`shops`.`created_at`)
+ORDER BY
+  DATE(`shops`.`created_at`) ASC;
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+Query ID - 853
+
+WITH call_duration_per_shop AS (
+  SELECT
+    s.shop_id,
+    DATE(s.created_at) AS sales_date,
+    SUM(c.call_duration) AS total_call_duration
+  FROM
+    sales AS s
+    LEFT JOIN callings AS c ON s.shop_id = c.shop_id
+  WHERE
+    s.created_at >= CONVERT_TZ('2024-11-01 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY
+    s.shop_id,
+    DATE(s.created_at)
+),
+
+ranked_pipeline_sales AS (
+  SELECT
+    ps.shop_id,
+    ps.created_at,
+    ROW_NUMBER() OVER (PARTITION BY ps.shop_id ORDER BY ps.created_at ASC) AS row_num
+  FROM
+    pipeline_sales AS ps
+),
+
+categorized_call_durations AS (
+  SELECT
+    cd.sales_date,
+    cd.shop_id,
+    cd.total_call_duration,
+    rps.created_at AS pipeline_created_at,
+    DATEDIFF(cd.sales_date, rps.created_at) AS date_diff,
+    CASE 
+      WHEN DATEDIFF(cd.sales_date, rps.created_at) = 0 THEN 'Same Day'
+      WHEN DATEDIFF(cd.sales_date, rps.created_at) BETWEEN 1 AND 7 THEN '1-7 Days'
+      WHEN DATEDIFF(cd.sales_date, rps.created_at) > 7 THEN 'More Than 7 Days'
+    END AS duration_category
+  FROM
+    call_duration_per_shop AS cd
+    LEFT JOIN ranked_pipeline_sales AS rps ON cd.shop_id = rps.shop_id AND rps.row_num = 1
+)
+
+SELECT
+  sales_date,
+  COALESCE(AVG(CASE WHEN duration_category = 'Same Day' THEN total_call_duration END), 0) AS avg_call_duration_same_day,
+  COALESCE(AVG(CASE WHEN duration_category = '1-7 Days' THEN total_call_duration END), 0) AS avg_call_duration_1_7_days,
+  COALESCE(AVG(CASE WHEN duration_category = 'More Than 7 Days' THEN total_call_duration END), 0) AS avg_call_duration_more_than_7_days
+FROM
+  categorized_call_durations
+GROUP BY
+  sales_date
+ORDER BY
+  sales_date ASC;
