@@ -1,0 +1,237 @@
+Query Id: 931
+SELECT 
+    suquery.hishabee_employee_id,
+    suquery.Name,
+    suquery.week_start,  -- Fixed Friday-based week start
+    suquery.Teams__name,
+    suquery.`Hishabee Employees - Shop__active`,
+    COALESCE(suquery.count, 0) AS count,  -- Set to 0 if no sales
+    COALESCE(suquery.sum, 0) AS sum,  -- Set to 0 if no sales
+    weekly_sales_earnings.present_at_work,
+    weekly_sales_earnings.tier,
+    DATE_FORMAT(suquery.week_start, '%M-%Y') AS `Month`,
+    suquery.region  -- Added region column
+FROM 
+    (
+        SELECT
+            weekly_sales_earnings.hishabee_employee_id AS hishabee_employee_id,
+            `Hishabee Employees - Shop`.name AS `Name`,
+            
+            -- Calculate the Friday-based week start using 27-Dec-2024 as anchor
+            DATE_ADD('2024-12-27', INTERVAL FLOOR(DATEDIFF(weekly_sales_earnings.start_date, '2024-12-27') / 7) * 7 DAY) AS week_start,
+            
+            Teams.name AS Teams__name,
+            `Hishabee Employees - Shop`.active AS `Hishabee Employees - Shop__active`,
+            `Hishabee Employees - Shop`.region AS `region`,  -- Added region column
+            COUNT(DISTINCT sales.shop_id) AS count,
+            SUM(sales.amount) AS sum
+        FROM
+            weekly_sales_earnings
+        LEFT JOIN sales 
+            ON weekly_sales_earnings.hishabee_employee_id = sales.hishabee_employee_id
+            AND DATE_ADD('2024-12-27', INTERVAL FLOOR(DATEDIFF(sales.created_at, '2024-12-27') / 7) * 7 DAY) = 
+                DATE_ADD('2024-12-27', INTERVAL FLOOR(DATEDIFF(weekly_sales_earnings.start_date, '2024-12-27') / 7) * 7 DAY)
+        LEFT JOIN hishabee_employees AS `Hishabee Employees - Shop` 
+            ON weekly_sales_earnings.hishabee_employee_id = `Hishabee Employees - Shop`.id
+        LEFT JOIN teams AS Teams 
+            ON `Hishabee Employees - Shop`.team_id = Teams.id
+        WHERE
+            weekly_sales_earnings.start_date > DATE '2024-12-26'
+            AND `Hishabee Employees - Shop`.position = 'Sales_Manager'  -- Added filter for Sales Manager
+            and `Hishabee Employees - Shop`.id not IN (133,152,165,177,199,200,202,215)
+        GROUP BY
+            weekly_sales_earnings.hishabee_employee_id,
+            week_start,
+            Teams.name,
+            `Hishabee Employees - Shop`.active,
+            `Hishabee Employees - Shop`.region  -- Ensure region is in GROUP BY
+    ) AS suquery
+LEFT JOIN weekly_sales_earnings
+    ON suquery.hishabee_employee_id = weekly_sales_earnings.hishabee_employee_id
+    AND suquery.week_start = weekly_sales_earnings.start_date
+ORDER BY 
+    Teams__name, 
+    hishabee_employee_id;
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 982
+SELECT
+  STR_TO_DATE('2024-12-27', '%Y-%m-%d') 
+    + INTERVAL FLOOR(DATEDIFF(DATE(`acquisition_sales`.`created_at`), '2024-12-27') / 7) * 7 DAY 
+    AS `week_start_date`,
+  `acquisition_sales`.`hishabee_employee_id` AS `hishabee_employee_id`,
+  SUM(`acquisition_sales`.`amount`) AS `sum`,
+  COUNT(DISTINCT `acquisition_sales`.`user_id`) AS `count`
+FROM
+  `acquisition_sales`
+LEFT JOIN `users` AS `users__via__user_id` 
+  ON `acquisition_sales`.`user_id` = `users__via__user_id`.`id`
+WHERE
+  `acquisition_sales`.`created_at` >= CONVERT_TZ(
+    '2024-12-27 00:00:00.000',
+    'UTC',
+    @@session.time_zone
+  )
+GROUP BY
+  `week_start_date`,
+  `acquisition_sales`.`hishabee_employee_id`
+ORDER BY
+  `week_start_date` ASC,
+  `acquisition_sales`.`hishabee_employee_id` ASC;
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id:986
+WITH daily_counts AS (
+  SELECT
+    DATE(`callings`.`created_at`) AS `created_at`,
+    `callings`.`hishabee_employee_id` AS `hishabee_employee_id`,
+    COUNT(DISTINCT `callings`.`shop_id`) AS `count`
+  FROM `callings`
+  WHERE 
+    `callings`.`created_at` >= CONVERT_TZ('2024-12-27 00:00:00.000', 'UTC', @@session.time_zone)
+    AND `callings`.`inorout` = 'Inbound'
+    AND `callings`.`call_duration` >= 240
+  GROUP BY DATE(`callings`.`created_at`), `callings`.`hishabee_employee_id`
+),
+
+weekly_counts AS (
+  SELECT
+    DATE_ADD('2024-12-27', INTERVAL FLOOR(DATEDIFF(`created_at`, '2024-12-27') / 7) * 7 DAY) AS `week_start_date`,
+    `hishabee_employee_id`,
+    AVG(`count`) AS `average_potential_lead`
+  FROM daily_counts
+  GROUP BY `week_start_date`, `hishabee_employee_id`
+),
+
+sales_data AS (
+  SELECT
+    DATE(`pipeline_sales`.`created_at`) AS `created_at`,
+    `pipeline_sales`.`hishabee_employee_id` AS `hishabee_employee_id`,
+    COUNT(DISTINCT `pipeline_sales`.`shop_id`) AS `Total_Quotation`,
+    COUNT(DISTINCT CASE 
+                        WHEN DATE(Shops.created_at) = DATE(pipeline_sales.created_at) 
+                        THEN pipeline_sales.shop_id 
+                        ELSE NULL 
+                    END) AS `New_seller_quotation`
+  FROM `pipeline_sales`
+  LEFT JOIN `shops` AS `Shops` ON `pipeline_sales`.`shop_id` = `Shops`.`id`
+  WHERE `pipeline_sales`.`created_at` >= CONVERT_TZ('2024-12-27 00:00:00.000', 'UTC', @@session.time_zone)
+  GROUP BY DATE(`pipeline_sales`.`created_at`), `pipeline_sales`.`hishabee_employee_id`
+), 
+
+weekly_data AS (
+  SELECT 
+    DATE_ADD('2024-12-27', INTERVAL FLOOR(DATEDIFF(created_at, '2024-12-27') / 7) * 7 DAY) AS `week_start_date`,
+    hishabee_employee_id,
+    SUM(Total_Quotation) AS `Total_Quotation_Weekly`,
+    SUM(New_seller_quotation) AS `New_seller_quotation_Weekly`
+  FROM sales_data
+  GROUP BY `week_start_date`, `hishabee_employee_id`
+),
+
+daily_sales AS (
+  SELECT
+    DATE(`pipeline_sales`.`created_at`) AS `created_at`,
+    `pipeline_sales`.`hishabee_employee_id` AS `hishabee_employee_id`,
+    COUNT(DISTINCT `pipeline_sales`.`shop_id`) AS `count`
+  FROM `pipeline_sales`
+  LEFT JOIN `shops` AS `Shops` ON `pipeline_sales`.`shop_id` = `Shops`.`id`
+  LEFT JOIN `subscription_items` AS `Subscription_Items_Shop`
+    ON `pipeline_sales`.`shop_id` = `Subscription_Items_Shop`.`shop_id`
+    AND DATE(`pipeline_sales`.`created_at`) = DATE(`Subscription_Items_Shop`.`created_at`)
+  WHERE 
+    `pipeline_sales`.`created_at` >= CONVERT_TZ('2024-12-27 00:00:00.000', 'UTC', @@session.time_zone)
+    AND `pipeline_sales`.`is_subscription_purchased` = TRUE
+    AND DATE(`pipeline_sales`.`created_at`) = DATE(`Subscription_Items_Shop`.`created_at`)
+    AND `pipeline_sales`.`created_at` < `Subscription_Items_Shop`.`created_at`
+  GROUP BY DATE(`pipeline_sales`.`created_at`), `pipeline_sales`.`hishabee_employee_id`
+),
+
+weekly_sums AS (
+  SELECT
+    DATE_ADD('2024-12-27', INTERVAL FLOOR(DATEDIFF(`created_at`, '2024-12-27') / 7) * 7 DAY) AS `week_start_date`,
+    `hishabee_employee_id`,
+    SUM(`count`) AS `sale_closed_same_day`
+  FROM daily_sales
+  GROUP BY `week_start_date`, `hishabee_employee_id`
+),
+
+-- New CTE for average_interested_feature_input
+daily_interested AS (
+  SELECT
+    DATE(`sales_machine_input_tracks`.`created_at`) AS `created_at`,
+    `sales_machine_input_tracks`.`hishabee_employee_id` AS `hishabee_employee_id`,
+    CAST(`sales_machine_input_tracks`.`interested_feature_input` AS DECIMAL) AS `interested_feature_input`
+  FROM `sales_machine_input_tracks`
+  WHERE 
+    `sales_machine_input_tracks`.`created_at` >= CONVERT_TZ('2024-12-27 00:00:00.000', 'UTC', @@session.time_zone)
+    AND `sales_machine_input_tracks`.`interested_feature_input_status` IS NOT NULL
+    AND `sales_machine_input_tracks`.`interested_feature_input_status` <> ''
+),
+
+weekly_avg AS (
+  SELECT
+    DATE_ADD('2024-12-27', INTERVAL FLOOR(DATEDIFF(`created_at`, '2024-12-27') / 7) * 7 DAY) AS `week_start_date`,
+    `hishabee_employee_id`,
+    AVG(`interested_feature_input`) AS `average_interested_feature_input`
+  FROM daily_interested
+  GROUP BY `week_start_date`, `hishabee_employee_id`
+)
+
+-- Final Query with LEFT JOIN (instead of FULL OUTER JOIN)
+SELECT 
+    wc.week_start_date, 
+    wc.hishabee_employee_id, 
+    wc.average_potential_lead, 
+    wd.Total_Quotation_Weekly, 
+    wd.New_seller_quotation_Weekly, 
+    ws.sale_closed_same_day,
+    wa.average_interested_feature_input  -- New Column
+FROM weekly_counts wc
+LEFT JOIN weekly_data wd 
+    ON wc.week_start_date = wd.week_start_date 
+    AND wc.hishabee_employee_id = wd.hishabee_employee_id
+LEFT JOIN weekly_sums ws 
+    ON wc.week_start_date = ws.week_start_date 
+    AND wc.hishabee_employee_id = ws.hishabee_employee_id
+LEFT JOIN weekly_avg wa 
+    ON wc.week_start_date = wa.week_start_date 
+    AND wc.hishabee_employee_id = wa.hishabee_employee_id
+
+UNION ALL
+
+SELECT 
+    wd.week_start_date, 
+    wd.hishabee_employee_id, 
+    NULL AS average_potential_lead, 
+    wd.Total_Quotation_Weekly, 
+    wd.New_seller_quotation_Weekly, 
+    ws.sale_closed_same_day,
+    wa.average_interested_feature_input  
+FROM weekly_data wd
+LEFT JOIN weekly_sums ws 
+    ON wd.week_start_date = ws.week_start_date 
+    AND wd.hishabee_employee_id = ws.hishabee_employee_id
+LEFT JOIN weekly_avg wa 
+    ON wd.week_start_date = wa.week_start_date 
+    AND wd.hishabee_employee_id = wa.hishabee_employee_id
+WHERE wd.hishabee_employee_id NOT IN (SELECT hishabee_employee_id FROM weekly_counts)
+
+UNION ALL
+
+SELECT 
+    ws.week_start_date, 
+    ws.hishabee_employee_id, 
+    NULL AS average_potential_lead, 
+    NULL AS Total_Quotation_Weekly, 
+    NULL AS New_seller_quotation_Weekly, 
+    ws.sale_closed_same_day,
+    wa.average_interested_feature_input  
+FROM weekly_sums ws
+LEFT JOIN weekly_avg wa 
+    ON ws.week_start_date = wa.week_start_date 
+    AND ws.hishabee_employee_id = wa.hishabee_employee_id
+WHERE ws.hishabee_employee_id NOT IN (SELECT hishabee_employee_id FROM weekly_counts)
+  AND ws.hishabee_employee_id NOT IN (SELECT hishabee_employee_id FROM weekly_data)
+
+ORDER BY week_start_date, hishabee_employee_id;
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
