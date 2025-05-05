@@ -1,0 +1,92 @@
+Query Id: 837
+
+SELECT 
+  DATE(shops.created_at) AS registration_date,
+
+  -- Total number of distinct registered shops for each day
+  COUNT(DISTINCT shops.id) AS total_registered_shops,
+
+  -- Number of distinct calls assigned and unassigned for each day
+  COUNT(DISTINCT CASE WHEN shops.assigned_to IS NOT NULL THEN shops.id ELSE NULL END) AS assigned_calls,
+  COUNT(DISTINCT CASE WHEN shops.assigned_to IS NULL THEN shops.id ELSE NULL END) AS unassigned_calls,
+
+  -- Distinct shop IDs where calls landed (present in callings) for assigned shops only
+  COUNT(DISTINCT CASE 
+    WHEN shops.assigned_to IS NOT NULL 
+         AND shops.id IN (SELECT shop_id FROM callings) 
+    THEN shops.id ELSE NULL 
+  END) AS calls_landed,
+
+  -- Distinct shop IDs where calls did not land (not present in callings) for assigned shops only
+  COUNT(DISTINCT CASE 
+    WHEN shops.assigned_to IS NOT NULL 
+         AND shops.id NOT IN (SELECT shop_id FROM callings) 
+    THEN shops.id ELSE NULL 
+  END) AS calls_not_landed,
+
+  -- Distinct shop IDs where calls landed on the same day as shop's created_at for assigned shops only
+  COUNT(DISTINCT CASE 
+    WHEN shops.assigned_to IS NOT NULL 
+         AND shops.id IN (SELECT shop_id FROM callings 
+                              WHERE DATE(callings.created_at) = DATE(shops.created_at)) 
+    THEN shops.id ELSE NULL 
+  END) AS calls_landed_same_day,
+
+  -- Distinct shop IDs where calls landed only after day 1 of shop's created_at for assigned shops only
+  COUNT(DISTINCT CASE 
+    WHEN shops.assigned_to IS NOT NULL 
+         AND shops.id IN (SELECT shop_id FROM callings 
+                              WHERE DATE(callings.created_at) > DATE(shops.created_at)
+                              AND shop_id NOT IN (SELECT shop_id FROM callings 
+                                                    WHERE DATE(callings.created_at) = DATE(shops.created_at))) 
+    THEN shops.id ELSE NULL 
+  END) AS calls_landed_after_day_1,
+
+  -- Count of shops by activation grade (only counting shops created on this date)
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'A1' THEN shops.id ELSE NULL END) AS grade_A1_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'A2' THEN shops.id ELSE NULL END) AS grade_A2_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'A3' THEN shops.id ELSE NULL END) AS grade_A3_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'A4' THEN shops.id ELSE NULL END) AS grade_A4_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'B1' THEN shops.id ELSE NULL END) AS grade_B1_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'B2' THEN shops.id ELSE NULL END) AS grade_B2_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'B3' THEN shops.id ELSE NULL END) AS grade_B3_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'B4' THEN shops.id ELSE NULL END) AS grade_B4_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'C1' THEN shops.id ELSE NULL END) AS grade_C1_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'C2' THEN shops.id ELSE NULL END) AS grade_C2_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'C3' THEN shops.id ELSE NULL END) AS grade_C3_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'C4' THEN shops.id ELSE NULL END) AS grade_C4_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'D1' THEN shops.id ELSE NULL END) AS grade_D1_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'D2' THEN shops.id ELSE NULL END) AS grade_D2_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'D3' THEN shops.id ELSE NULL END) AS grade_D3_count,
+  COUNT(DISTINCT CASE WHEN shops.activation_grade = 'D4' THEN shops.id ELSE NULL END) AS grade_D4_count,
+
+  -- Number of answered calls (where answer = 'Ans' or 'Answer')
+  COUNT(DISTINCT CASE WHEN (callings.answer = 'Ans' OR callings.answer = 'Answer') THEN callings.shop_id ELSE NULL END) AS answered_calls,
+
+  -- Average call duration for answered calls
+  AVG(CASE WHEN (callings.answer = 'Ans' OR callings.answer = 'Answer') THEN callings.call_duration ELSE NULL END) AS avg_call_duration,
+
+  -- Online sales count for shops registered and purchased on the same day with amount > 1
+  COUNT(DISTINCT CASE 
+    WHEN sales.hishabee_employee_id = 0 
+         AND DATE(shops.created_at) = DATE(sales.created_at) 
+         AND sales.amount > 1 
+    THEN sales.shop_id ELSE NULL END) AS online_sales_count,
+
+  -- Telesales count for shops registered and purchased on the same day with amount > 1
+  COUNT(DISTINCT CASE 
+    WHEN sales.hishabee_employee_id != 0 
+         AND DATE(shops.created_at) = DATE(sales.created_at) 
+         AND sales.amount > 1 
+    THEN sales.shop_id ELSE NULL END) AS telesales_count
+
+FROM 
+  shops
+LEFT JOIN 
+  callings ON shops.id = callings.shop_id
+LEFT JOIN 
+  sales ON shops.id = sales.shop_id
+WHERE 
+  DATE(shops.created_at) >= '2024-10-01'
+GROUP BY 
+  registration_date;
