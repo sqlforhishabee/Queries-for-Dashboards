@@ -1,0 +1,78 @@
+Query Id: 1022
+WITH UniqueSales AS (
+  SELECT
+    DATE_FORMAT(`created_at`, '%Y-%m-%d') AS `date`,
+    `shop_id` AS `sales_shop_id`,
+    `amount` AS `sales_amount`
+  FROM (
+    SELECT
+      `shop_id`,
+      `created_at`,
+      `amount`,
+      ROW_NUMBER() OVER (PARTITION BY `shop_id` ORDER BY `created_at`) AS rn
+    FROM
+      `sales`
+    WHERE
+      `created_at` >= CONVERT_TZ(
+        '2025-04-27 00:00:00.000',
+        'UTC',
+        @@session.time_zone
+      )
+  ) sub
+  WHERE
+    sub.rn = 1  -- Select earliest sales record per shop_id
+),
+UniquePipelineSales AS (
+  SELECT
+    DATE_FORMAT(`created_at`, '%Y-%m-%d') AS `date`,
+    `shop_id` AS `pipeline_sale_shop_id`,
+    `amount` AS `pipeline_sale_amount`
+  FROM (
+    SELECT
+      `shop_id`,
+      `created_at`,
+      `amount`,
+      ROW_NUMBER() OVER (PARTITION BY `shop_id` ORDER BY `created_at`) AS rn
+    FROM
+      `pipeline_sales`
+    WHERE
+      `created_at` >= CONVERT_TZ(
+        '2025-04-27 00:00:00.000',
+        'UTC',
+        @@session.time_zone
+      )
+  ) sub
+  WHERE
+    sub.rn = 1  -- Select earliest pipeline_sales record per shop_id
+),
+Combined AS (
+  -- Sales records
+  SELECT
+    us.`date`,
+    us.`sales_shop_id`,
+    us.`sales_amount`,
+    '' AS `pipeline_sale_shop_id`,
+    '' AS `pipeline_sale_amount`
+  FROM
+    UniqueSales us
+  UNION
+  -- Pipeline sales records
+  SELECT
+    ups.`date`,
+    '' AS `sales_shop_id`,
+    '' AS `sales_amount`,
+    ups.`pipeline_sale_shop_id`,
+    ups.`pipeline_sale_amount`
+  FROM
+    UniquePipelineSales ups
+)
+SELECT
+  `date`,
+  `sales_shop_id`,
+  `sales_amount`,
+  `pipeline_sale_shop_id`,
+  `pipeline_sale_amount`
+FROM
+  Combined
+ORDER BY
+  `date`, `sales_shop_id`, `pipeline_sale_shop_id`;
