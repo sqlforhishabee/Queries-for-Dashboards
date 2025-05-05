@@ -1,0 +1,270 @@
+Query Id: 808
+WITH sales_data AS (
+    SELECT
+        DATE(created_at) AS sales_date,
+        SUM(CASE WHEN hishabee_employee_id != 0 THEN amount ELSE 0 END) AS telesales,  
+        COUNT(DISTINCT shop_id) AS shop_count,
+        COUNT(DISTINCT CASE WHEN hishabee_employee_id != 0 THEN id END) AS total_telesales,  
+        SUM(CASE WHEN hishabee_employee_id = 0 THEN amount ELSE 0 END) AS online_sales,  
+        COUNT(DISTINCT CASE WHEN hishabee_employee_id = 0 THEN shop_id END) AS online_sales_count  
+    FROM sales
+    WHERE amount != 0  
+    GROUP BY sales_date
+),
+sales_voucher_data AS (
+    SELECT
+        DATE(created_at) AS voucher_date,
+        SUM(amount) AS voucher_amount
+    FROM sales_vouchers
+    WHERE hishabee_employee_id != 0
+    GROUP BY voucher_date
+),
+daily_sales_earnings_data AS (
+    SELECT
+        DATE(created_at) AS sales_date,
+        COUNT(DISTINCT hishabee_employee_id) AS employee_count,
+        COALESCE(SUM(daily_salary), 0) - (COALESCE(SUM(lead_cost), 0) + COALESCE(SUM(operation_pay_cut), 0)) AS total_salary,
+        COALESCE(SUM(referral_earning), 0) AS referral_earning,
+        COALESCE(SUM(extra_earnings), 0) AS extra_earnings
+    FROM daily_sales_earnings
+    WHERE hishabee_employee_id NOT IN (0, 195)
+    GROUP BY sales_date
+),
+weekly_sales_commission_data AS (
+    SELECT
+        DATE(end_date) AS sales_date,
+        COALESCE(SUM(total_commissions), 0) AS total_commissions
+    FROM weekly_sales_earnings
+    GROUP BY sales_date
+)
+SELECT
+    sd.sales_date AS date,
+    COALESCE(svd.voucher_amount, 0) AS `Voucher Amount`,
+    COALESCE(sd.online_sales, 0) * 0.95 AS `Online Sales Gross Profit`,
+    COALESCE(sd.online_sales, 0) * 0.05 AS `Online Sales Vat`,  
+    (COALESCE(dse.total_salary, 0) + COALESCE(wsc.total_commissions, 0)) AS `Total Salary`, 
+    COALESCE(sd.online_sales, 0) AS `Online Sales`,
+    COALESCE(dse.employee_count, 0) AS `Employee Count`,
+    COALESCE(sd.telesales, 0) AS `Telesales`,
+    COALESCE(dse.referral_earning, 0) AS `Referral Earning`,
+    COALESCE(sd.telesales, 0) * 0.95 AS `Telesales Gross Profit`,
+    COALESCE(dse.extra_earnings, 0) AS `Extra Earnings`,
+    COALESCE(sd.telesales, 0) * 0.05 AS `Telesales Vat`,  
+    COALESCE(sd.total_telesales, 0) AS `Telesales Count`,
+    COALESCE(sd.online_sales_count, 0) AS `Online Sales Count`
+
+FROM sales_data AS sd
+LEFT JOIN sales_voucher_data AS svd ON sd.sales_date = svd.voucher_date
+LEFT JOIN daily_sales_earnings_data AS dse ON sd.sales_date = dse.sales_date
+LEFT JOIN weekly_sales_commission_data AS wsc ON sd.sales_date = wsc.sales_date  
+
+WHERE sd.sales_date >= '2024-08-01'  
+
+ORDER BY sd.sales_date;
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 842
+WITH date_range AS (
+    SELECT DISTINCT DATE(created_at) AS sales_date
+    FROM sales
+    WHERE created_at >= '2024-10-30'
+
+    UNION
+
+    SELECT DISTINCT DATE(created_at) AS sales_date
+    FROM sales_vouchers
+    WHERE created_at >= '2024-10-30'
+
+    UNION
+
+    SELECT DISTINCT DATE(created_at) AS sales_date
+    FROM daily_sales_earnings
+    WHERE created_at >= '2024-10-30'
+
+    UNION
+
+    SELECT DISTINCT DATE(end_date) AS sales_date
+    FROM weekly_sales_earnings
+    WHERE end_date >= '2024-10-30'
+),
+sales_data AS (
+    SELECT
+        DATE(sales.created_at) AS sales_date,
+        hishabee_employees.region AS region,
+        SUM(CASE WHEN sales.hishabee_employee_id != 0 THEN sales.amount ELSE 0 END) AS telesales,
+        COUNT(DISTINCT sales.shop_id) AS shop_count,
+        COUNT(DISTINCT CASE WHEN sales.hishabee_employee_id != 0 THEN sales.id END) AS total_telesales
+    FROM sales
+    LEFT JOIN hishabee_employees ON sales.hishabee_employee_id = hishabee_employees.id
+    WHERE hishabee_employees.region = 'Jashore'
+        AND sales.amount != 0
+    GROUP BY sales_date, region
+),
+sales_voucher_data AS (
+    SELECT
+        DATE(sales_vouchers.created_at) AS voucher_date,
+        hishabee_employees.region AS region,
+        SUM(sales_vouchers.amount) AS voucher_amount
+    FROM sales_vouchers
+    LEFT JOIN hishabee_employees ON sales_vouchers.hishabee_employee_id = hishabee_employees.id
+    WHERE hishabee_employees.region = 'Jashore'
+    GROUP BY voucher_date, region
+),
+daily_sales_earnings_data AS (
+    SELECT
+        DATE(daily_sales_earnings.created_at) AS sales_date,
+        hishabee_employees.region AS region,
+        COUNT(DISTINCT daily_sales_earnings.hishabee_employee_id) AS employee_count,
+        -- Subtracting lead_cost and operation_pay_cut from total_salary
+        COALESCE(SUM(daily_sales_earnings.daily_salary), 0) 
+        - (COALESCE(SUM(daily_sales_earnings.lead_cost), 0) + COALESCE(SUM(daily_sales_earnings.operation_pay_cut), 0)) AS total_salary,
+        COALESCE(SUM(daily_sales_earnings.referral_earning), 0) AS referral_earning,
+        COALESCE(SUM(daily_sales_earnings.extra_earnings), 0) AS extra_earnings
+    FROM daily_sales_earnings
+    LEFT JOIN hishabee_employees ON daily_sales_earnings.hishabee_employee_id = hishabee_employees.id
+    WHERE hishabee_employees.region = 'Jashore'
+    GROUP BY sales_date, region
+),
+weekly_sales_commission_data AS (
+    SELECT
+        DATE(weekly_sales_earnings.end_date) AS sales_date,
+        hishabee_employees.region AS region,
+        COALESCE(SUM(weekly_sales_earnings.total_commissions), 0) AS total_commissions
+    FROM weekly_sales_earnings
+    LEFT JOIN hishabee_employees ON weekly_sales_earnings.hishabee_employee_id = hishabee_employees.id
+    WHERE hishabee_employees.region = 'Jashore'
+    GROUP BY sales_date, region
+)
+SELECT
+    dr.sales_date AS date,
+    COALESCE(dse.employee_count, 0) AS `Employee Count`,
+    
+    -- Adding total_salary and total_commissions
+    (COALESCE(dse.total_salary, 0) + COALESCE(wsc.total_commissions, 0)) AS `Total Salary`, 
+
+    COALESCE(svd.voucher_amount, 0) AS `Voucher Amount`,
+    COALESCE(dse.referral_earning, 0) AS `Referral Earning`,
+    COALESCE(dse.extra_earnings, 0) AS `Extra Earnings`,
+
+    -- Telesales
+    COALESCE(sd.telesales, 0) AS `Telesales`,
+    COALESCE(sd.telesales, 0) * 0.05 AS `Telesales Vat`,
+    COALESCE(sd.telesales, 0) * 0.95 AS `Telesales Gross Profit`,
+    COALESCE(sd.total_telesales, 0) AS `Telesales Count`
+
+FROM date_range AS dr
+LEFT JOIN sales_data AS sd ON dr.sales_date = sd.sales_date AND sd.region = 'Jashore'
+LEFT JOIN sales_voucher_data AS svd ON dr.sales_date = svd.voucher_date AND svd.region = 'Jashore'
+LEFT JOIN daily_sales_earnings_data AS dse ON dr.sales_date = dse.sales_date AND dse.region = 'Jashore'
+LEFT JOIN weekly_sales_commission_data AS wsc ON dr.sales_date = wsc.sales_date AND wsc.region = 'Jashore'  -- Joining weekly commission data
+
+WHERE dr.sales_date >= '2024-10-30'
+
+ORDER BY dr.sales_date;
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id:915
+SELECT
+  DATE(acquisition_sales.created_at) AS created_at,
+  SUM(acquisition_sales.amount) AS total_amount,
+  COUNT(DISTINCT acquisition_sales.user_id) AS user_count,
+  SUM(acquisition_sales.amount) * 0.05 AS vat -- VAT calculated on total amount
+FROM acquisition_sales
+WHERE acquisition_sales.hishabee_employee_region = 'Jashore' and DATE(acquisition_sales.created_at) >= '2024-10-30'
+GROUP BY DATE(acquisition_sales.created_at)
+ORDER BY DATE(acquisition_sales.created_at) ASC;
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Query Id: 929
+WITH CallingData AS (
+    SELECT
+        DATE(c.time) AS date,
+        e.region AS region,
+        COUNT(DISTINCT c.shop_id) AS call_count
+    FROM callings c
+    LEFT JOIN hishabee_employees e ON c.hishabee_employee_id = e.id
+    WHERE c.type = 'call'
+        AND c.inorout = 'Inbound'
+        AND c.created_at >= CONVERT_TZ('2024-08-01 00:00:00.000', 'UTC', @@session.time_zone)
+        AND (
+            c.answer NOT IN ('DROP', 'Not Connected', 'Unanswered', 'Unrech')
+            OR c.answer IS NULL
+        )
+    GROUP BY DATE(c.time), e.region
+),
+SalesData AS (
+    SELECT
+        DATE(s.created_at) AS date,
+        e.region AS region,
+        COUNT(DISTINCT s.shop_id) AS sales_count
+    FROM sales s
+    LEFT JOIN hishabee_employees e ON s.hishabee_employee_id = e.id
+    WHERE s.created_at >= CONVERT_TZ('2024-08-01 00:00:00.000', 'UTC', @@session.time_zone)
+    GROUP BY DATE(s.created_at), e.region
+)
+SELECT 
+    COALESCE(a.date, b.date) AS date,
+    COALESCE(a.region, b.region) AS region,
+    COALESCE(a.call_count, 0) AS call_count,
+    COALESCE(b.sales_count, 0) AS sales_count
+FROM CallingData a
+LEFT JOIN SalesData b 
+    ON a.date = b.date 
+    AND a.region = b.region
+UNION
+SELECT 
+    COALESCE(a.date, b.date) AS date,
+    COALESCE(a.region, b.region) AS region,
+    COALESCE(a.call_count, 0) AS call_count,
+    COALESCE(b.sales_count, 0) AS sales_count
+FROM SalesData b
+LEFT JOIN CallingData a 
+    ON a.date = b.date 
+    AND a.region = b.region
+ORDER BY date ASC, region ASC;
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Query Id: 930
+SELECT 
+    month,
+    region,
+    SUM(call_count) AS call_count,
+    SUM(sales_count) AS sales_count
+FROM (
+    -- Call Count Data
+    SELECT
+        STR_TO_DATE(
+            CONCAT(DATE_FORMAT(callings.time, '%Y-%m'), '-01'),
+            '%Y-%m-%d'
+        ) AS month,
+        Hishabee_Employees.region AS region,
+        COUNT(DISTINCT callings.shop_id) AS call_count,
+        0 AS sales_count
+    FROM callings
+    LEFT JOIN hishabee_employees AS Hishabee_Employees 
+        ON callings.hishabee_employee_id = Hishabee_Employees.id
+    WHERE 
+        (Hishabee_Employees.region <> '["Dhaka"]' OR Hishabee_Employees.region IS NULL)
+        AND (Hishabee_Employees.region <> 'BPO' OR Hishabee_Employees.region IS NULL)
+    GROUP BY month, region
+
+    UNION ALL
+
+    -- Sales Count Data
+    SELECT
+        STR_TO_DATE(
+            CONCAT(DATE_FORMAT(sales.created_at, '%Y-%m'), '-01'),
+            '%Y-%m-%d'
+        ) AS month,
+        Hishabee_Employees.region AS region,
+        0 AS call_count,
+        COUNT(DISTINCT sales.shop_id) AS sales_count
+    FROM sales
+    LEFT JOIN hishabee_employees AS Hishabee_Employees 
+        ON sales.hishabee_employee_id = Hishabee_Employees.id
+    WHERE 
+        (Hishabee_Employees.region <> '["Dhaka"]' OR Hishabee_Employees.region IS NULL)
+        AND (Hishabee_Employees.region <> 'BPO' OR Hishabee_Employees.region IS NULL)
+        AND sales.created_at >= CONVERT_TZ('2024-08-01 00:00:00.000', 'UTC', @@session.time_zone)
+    GROUP BY month, region
+) AS combined_data
+WHERE month >= '2024-08-01'
+GROUP BY month, region
+ORDER BY month ASC, region ASC;
